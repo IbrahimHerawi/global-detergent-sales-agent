@@ -1,0 +1,64 @@
+services:
+  api:
+    build:
+      context: .
+      target: development
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: .
+        target: /app
+      - type: volume
+        source: quote_storage
+        target: /app/storage/quotes
+      - type: tmpfs
+        target: /app/.mypy_cache
+        tmpfs:
+          mode: 511
+      - type: tmpfs
+        target: /app/.pytest_cache
+        tmpfs:
+          mode: 511
+      - type: tmpfs
+        target: /app/.ruff_cache
+        tmpfs:
+          mode: 511
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    volumes:
+      - type: volume
+        source: redis_data
+        target: /data
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  quote_storage:
+  redis_data:
