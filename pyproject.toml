@@ -1,0 +1,57 @@
+[project]
+name = "global-detergent-sales-agent"
+version = "0.1.0"
+description = "Global Detergent Factory AI sales agent"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi",
+    "httpx",
+    "jinja2",
+    "openai",
+    "orjson",
+    "pydantic",
+    "pydantic-settings",
+    "python-multipart",
+    "redis",
+    "uvicorn[standard]",
+    "weasyprint",
+]
+
+[dependency-groups]
+dev = [
+    "faker",
+    "mypy",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "respx",
+    "ruff",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+pretty = true
+show_error_codes = true
+files = ["app", "tests"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
