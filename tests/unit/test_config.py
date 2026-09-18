@@ -4,13 +4,14 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr, ValidationError
+
 from app.core.config import (
     Settings,
     clear_settings_cache,
     get_settings,
     override_settings,
 )
-from pydantic import SecretStr, ValidationError
 
 
 @pytest.fixture(autouse=True)
