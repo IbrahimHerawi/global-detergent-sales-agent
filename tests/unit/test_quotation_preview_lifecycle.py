@@ -141,6 +141,7 @@ def test_prepare_builds_preview_and_binds_it_without_authorizing_confirmation(
     session = ready_session()
     session.quote_confirmed = True
     session.confirmation_turn_id = "old-confirmation"
+    session.confirmation_message = "Old confirmation"
 
     preview = quotation_service.prepare_quotation(session, "preview-turn")
 
@@ -164,6 +165,7 @@ def test_prepare_builds_preview_and_binds_it_without_authorizing_confirmation(
     assert session.preview_delivered is False
     assert session.quote_confirmed is False
     assert session.confirmation_turn_id is None
+    assert session.confirmation_message is None
     assert session.last_quotation_id is None
 
 
@@ -194,6 +196,7 @@ def test_successful_matching_delivery_enters_awaiting_confirmation(
     assert session.preview_delivered is True
     assert session.quote_confirmed is False
     assert session.confirmation_turn_id is None
+    assert session.confirmation_message is None
 
 
 @pytest.mark.parametrize(

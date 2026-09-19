@@ -5,6 +5,8 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
+
 from app.schemas.quotation import CustomerInfo, QuoteCartItem
 from app.schemas.quotation_rules import QuotationRules
 from app.schemas.session import (
@@ -13,7 +15,6 @@ from app.schemas.session import (
     ConversationState,
     GeneratedQuoteReplayMetadata,
 )
-from pydantic import ValidationError
 
 
 def quotation_rules(**changes: object) -> QuotationRules:
@@ -59,6 +60,7 @@ def test_new_session_has_safe_defaults_and_transport_customer() -> None:
     assert session.preview_delivered is False
     assert session.preview_originating_turn_id is None
     assert session.confirmation_turn_id is None
+    assert session.confirmation_message is None
     assert session.last_generated_quote is None
     assert session.created_at.tzinfo is UTC
     assert session.updated_at.tzinfo is UTC
@@ -104,6 +106,7 @@ def test_complete_session_serializes_and_deserializes() -> None:
         preview_delivered=True,
         preview_originating_turn_id="turn-preview-1",
         confirmation_turn_id="turn-confirm-1",
+        confirmation_message="Confirmed",
         last_generated_quote=GeneratedQuoteReplayMetadata(
             quotation_id="GDF-Q-20260919-001",
             quote_fingerprint=fingerprint,
@@ -167,7 +170,11 @@ def test_lifecycle_metadata_distinguishes_internal_quote_stages() -> None:
         }
     )
     confirmed = delivered.model_copy(
-        update={"quote_confirmed": True, "confirmation_turn_id": "turn-confirm-1"}
+        update={
+            "quote_confirmed": True,
+            "confirmation_turn_id": "turn-confirm-1",
+            "confirmation_message": "Confirmed",
+        }
     )
     generated = confirmed.model_copy(
         update={
@@ -188,6 +195,7 @@ def test_lifecycle_metadata_distinguishes_internal_quote_stages() -> None:
     assert delivered.quote_confirmed is False
     assert confirmed.quote_confirmed is True
     assert confirmed.confirmation_turn_id == "turn-confirm-1"
+    assert confirmed.confirmation_message == "Confirmed"
     assert generated.last_generated_quote is not None
     assert generated.last_generated_quote.quote_fingerprint == fingerprint
 

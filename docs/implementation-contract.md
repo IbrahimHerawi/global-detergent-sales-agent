@@ -75,6 +75,7 @@ Early bootstrap success proves only that the current bootstrap surface operates.
 - GET and POST WhatsApp webhook routes implement verification, validated parsing, atomic claim, session/agent execution, state persistence, and outbound delivery. The POST route returns HTTP 200 promptly; synchronous processing is acceptable for MVP.
 - Meta and OpenAI calls use timeouts and safe error handling. Standard automated tests mock paid/external services.
 - The prompt enforces concise professional conduct, backend factual authority, missing-information disclosure, explicit confirmation, and no human-handoff offer. The tool executor has an allowlist, Pydantic argument validation, no dynamic execution, and a configurable bounded tool loop (initial maximum 8).
+- Natural-language confirmation is a semantic judgment and therefore requires model evaluation for wording beyond the conservative canonical fallback. Backend state checks cannot prove that a customer message expresses confirmation; they instead ensure that any interpreted confirmation belongs to the current session and a later customer turn, and is bound to the successfully delivered, unchanged preview. The confirmation tool accepts no state, delivery, fingerprint, or authorization arguments.
 - Logging is structured and includes request/message/session/tool/state/quotation correlation while masking phone numbers and excluding secrets, authorization headers, and full sensitive conversation content by default in production.
 
 ## 8. Preserved MVP exclusions

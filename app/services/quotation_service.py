@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Final
+from uuid import UUID
 
 from app.core.exceptions import (
     CustomerInformationRequiredError,
     InvalidConversationStateError,
     InvalidQuantityError,
     ProductNotFoundError,
+    QuoteNotConfirmedError,
     StalePreviewError,
 )
 from app.repositories.product_repository import ProductRepository
@@ -40,15 +45,46 @@ _UNSET: Final = _UnsetType()
 CustomerUpdateValue = str | None | _UnsetType
 
 
+class ConfirmationInterpretation(StrEnum):
+    """Semantic result produced from the current customer message only."""
+
+    EXPLICIT = "EXPLICIT"
+    AMBIGUOUS = "AMBIGUOUS"
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentTurnContext:
+    """Backend-owned evidence for the customer turn invoking confirmation.
+
+    This context is constructed by conversation orchestration, not from tool
+    arguments. In particular, it deliberately contains no state, preview,
+    fingerprint, or authorization flag that a model could provide.
+    """
+
+    session_id: UUID
+    turn_id: str
+    customer_message: str
+    preceding_turn_ids: tuple[str, ...]
+
+
+ConfirmationInterpreter = Callable[[str], ConfirmationInterpretation]
+
+
 class QuotationService:
     """Manage quotation state using authoritative catalog product identities."""
 
-    __slots__ = ("_calculator", "_product_repository", "_rules_repository")
+    __slots__ = (
+        "_calculator",
+        "_confirmation_interpreter",
+        "_product_repository",
+        "_rules_repository",
+    )
 
     def __init__(
         self,
         product_repository: ProductRepository | None = None,
         rules_repository: QuotationRulesRepository | None = None,
+        confirmation_interpreter: ConfirmationInterpreter | None = None,
     ) -> None:
         self._product_repository = (
             product_repository if product_repository is not None else ProductRepository()
@@ -59,6 +95,11 @@ class QuotationService:
         self._calculator = QuotationCalculator(
             self._product_repository,
             self._rules_repository,
+        )
+        self._confirmation_interpreter = (
+            confirmation_interpreter
+            if confirmation_interpreter is not None
+            else _interpret_conservative_confirmation
         )
 
     def add_item(
@@ -189,6 +230,7 @@ class QuotationService:
         session.preview_originating_turn_id = valid_turn_id
         session.quote_confirmed = False
         session.confirmation_turn_id = None
+        session.confirmation_message = None
         session.state = ConversationState.QUOTE_REVIEW
         return preview
 
@@ -226,7 +268,79 @@ class QuotationService:
         session.preview_delivered = True
         session.quote_confirmed = False
         session.confirmation_turn_id = None
+        session.confirmation_message = None
         session.state = ConversationState.AWAITING_CONFIRMATION
+
+    def confirm(
+        self,
+        session: ConversationSession,
+        current_turn_context: CurrentTurnContext,
+    ) -> None:
+        """Confirm the delivered current preview from a later customer turn.
+
+        Calling this method expresses the model's request to interpret the
+        current message as confirmation. Authorization still depends entirely
+        on backend-owned session and preview state, plus semantic evaluation of
+        the preserved message. No caller-supplied boolean can authorize it.
+        """
+        turn_id, customer_message = _validate_current_turn_context(
+            session,
+            current_turn_context,
+        )
+        self._validate_current_delivered_preview(session)
+
+        preview_turn_id = session.preview_originating_turn_id
+        if (
+            preview_turn_id is None
+            or turn_id == preview_turn_id
+            or preview_turn_id not in current_turn_context.preceding_turn_ids
+        ):
+            raise InvalidConversationStateError(
+                "Confirmation must come from a customer turn after preview delivery"
+            )
+
+        interpretation = self._confirmation_interpreter(customer_message)
+        if interpretation is not ConfirmationInterpretation.EXPLICIT:
+            raise QuoteNotConfirmedError(
+                "The current customer message is not an explicit confirmation"
+            )
+
+        session.quote_confirmed = True
+        session.confirmation_turn_id = turn_id
+        session.confirmation_message = customer_message
+
+    def validate_generation_authorization(self, session: ConversationSession) -> None:
+        """Fail unless the current delivered preview has explicit authorization."""
+        self._validate_current_delivered_preview(session)
+        if (
+            not session.quote_confirmed
+            or not _is_nonblank(session.confirmation_turn_id)
+            or not _is_nonblank(session.confirmation_message)
+        ):
+            raise QuoteNotConfirmedError(
+                "The current quotation has no preserved explicit confirmation evidence"
+            )
+
+    def _validate_current_delivered_preview(
+        self,
+        session: ConversationSession,
+    ) -> None:
+        """Validate all backend-owned facts shared by confirm and generation."""
+        self._calculate_preview(session)
+        self.validate_customer_information(session)
+
+        if session.state is not ConversationState.AWAITING_CONFIRMATION:
+            raise InvalidConversationStateError("Quotation must be awaiting confirmation")
+        if not session.preview_delivered:
+            raise InvalidConversationStateError(
+                "The current quotation preview was not successfully delivered"
+            )
+
+        prepared_fingerprint = session.prepared_preview_fingerprint
+        if prepared_fingerprint is None:
+            raise StalePreviewError("No delivered quotation preview is bound to the session")
+        if self._current_quote_fingerprint(session) != prepared_fingerprint:
+            raise StalePreviewError("Quotation inputs changed after preview delivery")
 
     def _calculate_preview(self, session: ConversationSession) -> QuotePreview:
         lines, totals = self._calculator.calculate(session.cart)
@@ -323,6 +437,55 @@ def _validate_binding_value(value: str, field_name: str) -> str:
     return value.strip()
 
 
+def _validate_current_turn_context(
+    session: ConversationSession,
+    context: CurrentTurnContext,
+) -> tuple[str, str]:
+    if not isinstance(context, CurrentTurnContext):
+        raise TypeError("current_turn_context must be backend-owned CurrentTurnContext")
+    if context.session_id != session.session_id:
+        raise InvalidConversationStateError(
+            "Confirmation turn belongs to a different conversation session"
+        )
+    turn_id = _validate_binding_value(context.turn_id, "turn_id")
+    if not isinstance(context.preceding_turn_ids, tuple) or any(
+        not isinstance(prior_turn_id, str) or not prior_turn_id.strip()
+        for prior_turn_id in context.preceding_turn_ids
+    ):
+        raise TypeError("preceding_turn_ids must contain backend-owned turn IDs")
+    if not isinstance(context.customer_message, str) or not context.customer_message.strip():
+        raise QuoteNotConfirmedError("A current customer message is required for confirmation")
+    return turn_id, context.customer_message
+
+
+_EXPLICIT_CONFIRMATION_MESSAGES: Final = frozenset(
+    {
+        "yes",
+        "confirmed",
+        "correct",
+        "proceed",
+        "generate it",
+        "generate the quotation",
+        "please generate it",
+        "please generate the quotation",
+    }
+)
+
+
+def _interpret_conservative_confirmation(message: str) -> ConfirmationInterpretation:
+    """Recognize only canonical confirmations when no model evaluator is wired.
+
+    Broader natural-language meaning requires model evaluation. This fallback
+    intentionally treats uncertainty, proposed changes, and all unrecognized
+    wording as ambiguous rather than granting quotation authorization.
+    """
+    normalized = re.sub(r"[^\w\s]", "", message.casefold()).strip()
+    normalized = " ".join(normalized.split())
+    if normalized in _EXPLICIT_CONFIRMATION_MESSAGES:
+        return ConfirmationInterpretation.EXPLICIT
+    return ConfirmationInterpretation.AMBIGUOUS
+
+
 def _preview_text(preview: QuotePreview) -> str:
     """Render all preview facts in a stable, transport-independent format."""
     customer = preview.customer
@@ -394,6 +557,7 @@ def _invalidate_quote_authorization(session: ConversationSession) -> None:
     session.preview_originating_turn_id = None
     session.quote_confirmed = False
     session.confirmation_turn_id = None
+    session.confirmation_message = None
     session.last_generated_quote = None
 
 
@@ -402,5 +566,7 @@ __all__ = [
     "EMAIL_MAX_LENGTH",
     "NAME_MAX_LENGTH",
     "NOTES_MAX_LENGTH",
+    "ConfirmationInterpretation",
+    "CurrentTurnContext",
     "QuotationService",
 ]

@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+
 from app.core.exceptions import (
     CustomerInformationRequiredError,
     InvalidQuantityError,
@@ -77,6 +78,7 @@ def prepared_session(*items: tuple[str, int]) -> ConversationSession:
     session.preview_originating_turn_id = "preview-turn"
     session.quote_confirmed = True
     session.confirmation_turn_id = "confirmation-turn"
+    session.confirmation_message = "Confirmed"
     session.last_quotation_id = "GDF-Q-20260919-001"
     session.last_generated_quote = GeneratedQuoteReplayMetadata(
         quotation_id="GDF-Q-20260919-001",
@@ -94,6 +96,7 @@ def assert_quote_authorization_invalidated(session: ConversationSession) -> None
     assert session.preview_originating_turn_id is None
     assert session.quote_confirmed is False
     assert session.confirmation_turn_id is None
+    assert session.confirmation_message is None
     assert session.last_generated_quote is None
 
 
@@ -178,9 +181,7 @@ Mutation = Callable[[QuotationService, ConversationSession], None]
             ConversationState.BUILDING_QUOTE,
         ),
         (
-            lambda service, session: service.update_item_quantity(
-                session, ACTIVE_PRODUCT_ID, 4
-            ),
+            lambda service, session: service.update_item_quantity(session, ACTIVE_PRODUCT_ID, 4),
             ConversationState.BUILDING_QUOTE,
         ),
         (
@@ -394,24 +395,16 @@ InvalidCustomerUpdate = Callable[[QuotationService, ConversationSession], None]
 @pytest.mark.parametrize(
     "update",
     [
-        lambda service, session: service.set_customer_information(
-            session, name="n" * 201
-        ),
-        lambda service, session: service.set_customer_information(
-            session, company_name="c" * 201
-        ),
+        lambda service, session: service.set_customer_information(session, name="n" * 201),
+        lambda service, session: service.set_customer_information(session, company_name="c" * 201),
         lambda service, session: service.set_customer_information(
             session, contact_person="p" * 201
         ),
         lambda service, session: service.set_customer_information(
             session, email=f"{'a' * 243}@example.com"
         ),
-        lambda service, session: service.set_customer_information(
-            session, address="a" * 1_001
-        ),
-        lambda service, session: service.set_customer_information(
-            session, notes="n" * 2_001
-        ),
+        lambda service, session: service.set_customer_information(session, address="a" * 1_001),
+        lambda service, session: service.set_customer_information(session, notes="n" * 2_001),
     ],
 )
 def test_overlong_customer_fields_fail_atomically(

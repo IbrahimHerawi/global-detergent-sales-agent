@@ -115,6 +115,7 @@ class ConversationSession(SessionModel):
     preview_delivered: bool = False
     preview_originating_turn_id: str | None = None
     confirmation_turn_id: str | None = None
+    confirmation_message: str | None = None
     last_generated_quote: GeneratedQuoteReplayMetadata | None = None
 
     @model_validator(mode="before")
