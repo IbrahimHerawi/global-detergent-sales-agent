@@ -5,18 +5,14 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.dependencies import get_conversation_service
 from app.core.config import get_settings
+from app.schemas.development import DevelopmentSessionId
 from app.schemas.quotation import QuoteCartItem
 from app.schemas.session import ConversationState
 from app.services.conversation_service import ConversationService
-
-DevelopmentSessionId = Annotated[
-    str,
-    StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,100}$"),
-]
 
 router = APIRouter(prefix="/api/v1/dev", tags=["development-chat"])
 
