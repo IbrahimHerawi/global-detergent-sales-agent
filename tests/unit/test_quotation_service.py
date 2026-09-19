@@ -1,13 +1,18 @@
 """Tests for atomic quotation cart operations and lifecycle invalidation."""
 
+import inspect
 import json
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from app.core.exceptions import InvalidQuantityError, ProductNotFoundError
+from app.core.exceptions import (
+    CustomerInformationRequiredError,
+    InvalidQuantityError,
+    ProductNotFoundError,
+)
 from app.repositories.product_repository import ProductRepository
-from app.schemas.quotation import QuoteCartItem
+from app.schemas.quotation import CustomerInfo, QuoteCartItem
 from app.schemas.session import (
     ConversationSession,
     ConversationState,
@@ -275,5 +280,280 @@ def test_clearing_empty_cart_is_a_no_op(quotation_service: QuotationService) -> 
     before = session.model_dump_json()
 
     quotation_service.clear_cart(session)
+
+    assert session.model_dump_json() == before
+
+
+def complete_customer() -> CustomerInfo:
+    return CustomerInfo(
+        phone="+97450000000",
+        name="Original Name",
+        company_name="Original Company",
+        contact_person="Original Contact",
+        email="original@example.com",
+        address="Original Address",
+        notes="Original Notes",
+    )
+
+
+def test_customer_partial_update_trims_values_and_preserves_omitted_fields(
+    quotation_service: QuotationService,
+) -> None:
+    session = session_with_cart((ACTIVE_PRODUCT_ID, 1))
+    session.customer = complete_customer()
+
+    quotation_service.set_customer_information(
+        session,
+        name="  Updated Name  ",
+        email="  updated@example.com  ",
+    )
+
+    assert session.customer == CustomerInfo(
+        phone="+97450000000",
+        name="Updated Name",
+        company_name="Original Company",
+        contact_person="Original Contact",
+        email="updated@example.com",
+        address="Original Address",
+        notes="Original Notes",
+    )
+    assert session.state is ConversationState.BUILDING_QUOTE
+
+
+def test_explicit_null_clears_optional_customer_fields(
+    quotation_service: QuotationService,
+) -> None:
+    session = session_with_cart((ACTIVE_PRODUCT_ID, 1))
+    session.customer = complete_customer()
+
+    quotation_service.set_customer_information(
+        session,
+        company_name=None,
+        contact_person=None,
+        email=None,
+        address=None,
+        notes=None,
+    )
+
+    assert session.customer == CustomerInfo(phone="+97450000000", name="Original Name")
+    assert session.state is ConversationState.BUILDING_QUOTE
+
+
+def test_whitespace_is_trimmed_and_whitespace_identity_is_not_ready(
+    quotation_service: QuotationService,
+) -> None:
+    session = session_with_cart((ACTIVE_PRODUCT_ID, 1))
+
+    quotation_service.set_customer_information(
+        session,
+        name="   ",
+        company_name="  ",
+        contact_person="  Contact Person  ",
+        address="  Doha  ",
+        notes="  Call first.  ",
+    )
+
+    assert session.customer.name == ""
+    assert session.customer.company_name == ""
+    assert session.customer.contact_person == "Contact Person"
+    assert session.customer.address == "Doha"
+    assert session.customer.notes == "Call first."
+    assert session.state is ConversationState.CUSTOMER_DETAILS
+    with pytest.raises(CustomerInformationRequiredError):
+        quotation_service.validate_customer_information(session)
+
+
+def test_all_bounded_customer_fields_accept_their_limits(
+    quotation_service: QuotationService,
+) -> None:
+    session = session_with_cart()
+    email = f"{'a' * 64}@{'b' * 61}.{'c' * 61}.{'d' * 61}.com"
+    assert len(email) == 254
+
+    quotation_service.set_customer_information(
+        session,
+        name="n" * 200,
+        company_name="c" * 200,
+        contact_person="p" * 200,
+        email=email,
+        address="a" * 1_000,
+        notes="x" * 2_000,
+    )
+
+    assert session.customer.name == "n" * 200
+    assert session.customer.company_name == "c" * 200
+    assert session.customer.contact_person == "p" * 200
+    assert session.customer.email == email
+    assert session.customer.address == "a" * 1_000
+    assert session.customer.notes == "x" * 2_000
+
+
+InvalidCustomerUpdate = Callable[[QuotationService, ConversationSession], None]
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        lambda service, session: service.set_customer_information(
+            session, name="n" * 201
+        ),
+        lambda service, session: service.set_customer_information(
+            session, company_name="c" * 201
+        ),
+        lambda service, session: service.set_customer_information(
+            session, contact_person="p" * 201
+        ),
+        lambda service, session: service.set_customer_information(
+            session, email=f"{'a' * 243}@example.com"
+        ),
+        lambda service, session: service.set_customer_information(
+            session, address="a" * 1_001
+        ),
+        lambda service, session: service.set_customer_information(
+            session, notes="n" * 2_001
+        ),
+    ],
+)
+def test_overlong_customer_fields_fail_atomically(
+    quotation_service: QuotationService,
+    update: InvalidCustomerUpdate,
+) -> None:
+    session = prepared_session((ACTIVE_PRODUCT_ID, 1))
+    session.customer = complete_customer()
+    before = session.model_dump_json()
+
+    with pytest.raises(ValueError):
+        update(quotation_service, session)
+
+    assert session.model_dump_json() == before
+
+
+@pytest.mark.parametrize(
+    "email",
+    [
+        "",
+        "   ",
+        "missing-at.example.com",
+        "two@@example.com",
+        "spaces are@example.com",
+        "missing-domain@",
+        "missing-dot@example",
+        ".invalid@example.com",
+    ],
+)
+def test_malformed_email_fails_without_mutating_session(
+    quotation_service: QuotationService,
+    email: str,
+) -> None:
+    session = prepared_session((ACTIVE_PRODUCT_ID, 1))
+    session.customer = complete_customer()
+    before = session.model_dump_json()
+
+    with pytest.raises(ValueError, match="valid address"):
+        quotation_service.set_customer_information(session, email=email)
+
+    assert session.model_dump_json() == before
+
+
+def test_customer_phone_is_not_an_update_parameter_and_remains_transport_owned(
+    quotation_service: QuotationService,
+) -> None:
+    parameters = inspect.signature(QuotationService.set_customer_information).parameters
+    session = session_with_cart()
+    session.customer = CustomerInfo(phone="+111111", name="Original")
+
+    quotation_service.set_customer_information(session, name="Updated")
+
+    assert "phone" not in parameters
+    assert session.customer.phone == session.customer_phone == "+97450000000"
+
+
+@pytest.mark.parametrize(
+    "customer",
+    [
+        CustomerInfo(phone="+97450000000", name="Customer Name"),
+        CustomerInfo(phone="+97450000000", company_name="Company Name"),
+    ],
+)
+def test_name_or_company_name_with_transport_phone_is_ready(
+    quotation_service: QuotationService,
+    customer: CustomerInfo,
+) -> None:
+    session = session_with_cart((ACTIVE_PRODUCT_ID, 1))
+    session.customer = customer
+    session.state = ConversationState.BUILDING_QUOTE
+
+    quotation_service.validate_customer_information(session)
+
+    assert session.state is ConversationState.BUILDING_QUOTE
+
+
+@pytest.mark.parametrize(
+    ("customer_phone", "customer"),
+    [
+        ("+97450000000", CustomerInfo(phone="+97450000000")),
+        ("+97450000000", CustomerInfo(phone="+97450000000", name="   ")),
+        ("", CustomerInfo(phone="", name="Customer Name")),
+        ("+97450000000", CustomerInfo(phone="+111111", name="Customer Name")),
+    ],
+)
+def test_missing_required_identity_enters_customer_details(
+    quotation_service: QuotationService,
+    customer_phone: str,
+    customer: CustomerInfo,
+) -> None:
+    session = ConversationSession(customer_phone=customer_phone, customer=customer)
+    session.state = ConversationState.QUOTE_REVIEW
+
+    with pytest.raises(CustomerInformationRequiredError):
+        quotation_service.validate_customer_information(session)
+
+    assert session.state is ConversationState.CUSTOMER_DETAILS
+
+
+def test_clearing_required_identity_enters_customer_details_and_invalidates(
+    quotation_service: QuotationService,
+) -> None:
+    session = prepared_session((ACTIVE_PRODUCT_ID, 1))
+    session.customer = CustomerInfo(phone=session.customer_phone, name="Customer Name")
+
+    quotation_service.set_customer_information(session, name=None, company_name=None)
+
+    assert session.customer.name is None
+    assert session.state is ConversationState.CUSTOMER_DETAILS
+    assert_quote_authorization_invalidated(session)
+
+
+def test_actual_customer_change_with_cart_invalidates_confirmation(
+    quotation_service: QuotationService,
+) -> None:
+    session = prepared_session((ACTIVE_PRODUCT_ID, 1))
+
+    quotation_service.set_customer_information(session, company_name="Company Name")
+
+    assert session.customer.company_name == "Company Name"
+    assert session.state is ConversationState.BUILDING_QUOTE
+    assert_quote_authorization_invalidated(session)
+
+
+def test_ready_customer_without_cart_enters_product_discussion(
+    quotation_service: QuotationService,
+) -> None:
+    session = prepared_session()
+
+    quotation_service.set_customer_information(session, name="Customer Name")
+
+    assert session.state is ConversationState.PRODUCT_DISCUSSION
+    assert_quote_authorization_invalidated(session)
+
+
+def test_equivalent_trimmed_customer_update_is_a_no_op(
+    quotation_service: QuotationService,
+) -> None:
+    session = prepared_session((ACTIVE_PRODUCT_ID, 1))
+    session.customer = CustomerInfo(phone=session.customer_phone, name="Customer Name")
+    before = session.model_dump_json()
+
+    quotation_service.set_customer_information(session, name="  Customer Name  ")
 
     assert session.model_dump_json() == before

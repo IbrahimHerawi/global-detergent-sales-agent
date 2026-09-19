@@ -2,11 +2,38 @@
 
 from __future__ import annotations
 
-from app.core.exceptions import InvalidQuantityError, ProductNotFoundError
+import re
+from typing import Final
+
+from app.core.exceptions import (
+    CustomerInformationRequiredError,
+    InvalidQuantityError,
+    ProductNotFoundError,
+)
 from app.repositories.product_repository import ProductRepository
 from app.schemas.product import Product
-from app.schemas.quotation import QuoteCartItem
+from app.schemas.quotation import CustomerInfo, QuoteCartItem
 from app.schemas.session import ConversationSession, ConversationState
+
+NAME_MAX_LENGTH: Final = 200
+EMAIL_MAX_LENGTH: Final = 254
+ADDRESS_MAX_LENGTH: Final = 1_000
+NOTES_MAX_LENGTH: Final = 2_000
+_EMAIL_PATTERN = re.compile(
+    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+)
+
+
+class _UnsetType:
+    """Sentinel type distinguishing omission from an explicit null update."""
+
+    __slots__ = ()
+
+
+_UNSET: Final = _UnsetType()
+CustomerUpdateValue = str | None | _UnsetType
 
 
 class QuotationService:
@@ -81,6 +108,53 @@ class QuotationService:
             return
         _commit_cart_change(session, [])
 
+    def set_customer_information(
+        self,
+        session: ConversationSession,
+        *,
+        name: CustomerUpdateValue = _UNSET,
+        company_name: CustomerUpdateValue = _UNSET,
+        contact_person: CustomerUpdateValue = _UNSET,
+        email: CustomerUpdateValue = _UNSET,
+        address: CustomerUpdateValue = _UNSET,
+        notes: CustomerUpdateValue = _UNSET,
+    ) -> None:
+        """Apply a validated partial customer update without exposing phone."""
+        current = session.customer
+        customer_data = current.model_dump(mode="python")
+        customer_data["phone"] = session.customer_phone
+
+        updates = {
+            "name": _normalize_optional_string(name, "name", NAME_MAX_LENGTH),
+            "company_name": _normalize_optional_string(
+                company_name, "company_name", NAME_MAX_LENGTH
+            ),
+            "contact_person": _normalize_optional_string(
+                contact_person, "contact_person", NAME_MAX_LENGTH
+            ),
+            "email": _normalize_email(email),
+            "address": _normalize_optional_string(address, "address", ADDRESS_MAX_LENGTH),
+            "notes": _normalize_optional_string(notes, "notes", NOTES_MAX_LENGTH),
+        }
+        customer_data.update(
+            {field_name: value for field_name, value in updates.items() if value is not _UNSET}
+        )
+        candidate = CustomerInfo.model_validate(customer_data)
+        if candidate == current:
+            return
+
+        session.customer = candidate
+        _invalidate_quote_authorization(session)
+        session.state = _customer_update_state(session)
+
+    def validate_customer_information(self, session: ConversationSession) -> None:
+        """Require a transport phone and at least one nonblank identity name."""
+        if not _customer_information_is_ready(session):
+            session.state = ConversationState.CUSTOMER_DETAILS
+            raise CustomerInformationRequiredError(
+                "A nonblank name or company name and transport phone are required"
+            )
+
     def _require_active_product(self, product_id: str) -> Product:
         """Resolve a catalog product and reject unknown or inactive records."""
         if not isinstance(product_id, str) or not product_id.strip():
@@ -102,19 +176,66 @@ def _find_cart_item(cart: list[QuoteCartItem], product_id: str) -> QuoteCartItem
     return next((item for item in cart if item.product_id == product_id), None)
 
 
+def _normalize_optional_string(
+    value: CustomerUpdateValue,
+    field_name: str,
+    max_length: int,
+) -> str | _UnsetType | None:
+    if value is _UNSET or value is None:
+        return value
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string or null")
+    normalized = value.strip()
+    if len(normalized) > max_length:
+        raise ValueError(f"{field_name} must not exceed {max_length} characters")
+    return normalized
+
+
+def _normalize_email(value: CustomerUpdateValue) -> str | _UnsetType | None:
+    normalized = _normalize_optional_string(value, "email", EMAIL_MAX_LENGTH)
+    if isinstance(normalized, _UnsetType) or normalized is None:
+        return normalized
+    if not normalized or not _EMAIL_PATTERN.fullmatch(normalized):
+        raise ValueError("email must be a valid address")
+    local_part, domain = normalized.rsplit("@", maxsplit=1)
+    if (
+        len(local_part) > 64
+        or len(domain) > 253
+        or local_part.startswith(".")
+        or local_part.endswith(".")
+        or ".." in local_part
+    ):
+        raise ValueError("email must be a valid address")
+    return normalized
+
+
+def _customer_information_is_ready(session: ConversationSession) -> bool:
+    customer = session.customer
+    has_identity = _is_nonblank(customer.name) or _is_nonblank(customer.company_name)
+    has_transport_phone = _is_nonblank(session.customer_phone)
+    phone_is_authoritative = customer.phone == session.customer_phone
+    return has_identity and has_transport_phone and phone_is_authoritative
+
+
+def _is_nonblank(value: str | None) -> bool:
+    return value is not None and bool(value.strip())
+
+
+def _customer_update_state(session: ConversationSession) -> ConversationState:
+    if not _customer_information_is_ready(session):
+        return ConversationState.CUSTOMER_DETAILS
+    if session.cart:
+        return ConversationState.BUILDING_QUOTE
+    return ConversationState.PRODUCT_DISCUSSION
+
+
 def _commit_cart_change(
     session: ConversationSession,
     new_cart: list[QuoteCartItem],
 ) -> None:
     """Commit one validated change and revoke stale quote authorization."""
     session.cart = new_cart
-    session.quote_revision += 1
-    session.prepared_preview_fingerprint = None
-    session.preview_delivered = False
-    session.preview_originating_turn_id = None
-    session.quote_confirmed = False
-    session.confirmation_turn_id = None
-    session.last_generated_quote = None
+    _invalidate_quote_authorization(session)
     session.state = (
         ConversationState.BUILDING_QUOTE
         if new_cart
@@ -122,4 +243,21 @@ def _commit_cart_change(
     )
 
 
-__all__ = ["QuotationService"]
+def _invalidate_quote_authorization(session: ConversationSession) -> None:
+    """Revoke preview, confirmation, and replay bindings after quote input changes."""
+    session.quote_revision += 1
+    session.prepared_preview_fingerprint = None
+    session.preview_delivered = False
+    session.preview_originating_turn_id = None
+    session.quote_confirmed = False
+    session.confirmation_turn_id = None
+    session.last_generated_quote = None
+
+
+__all__ = [
+    "ADDRESS_MAX_LENGTH",
+    "EMAIL_MAX_LENGTH",
+    "NAME_MAX_LENGTH",
+    "NOTES_MAX_LENGTH",
+    "QuotationService",
+]
