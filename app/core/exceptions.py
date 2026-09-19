@@ -63,6 +63,11 @@ class EmptyQuoteError(BusinessError):
     public_message = "The quotation must contain at least one item."
 
 
+class CurrencyMismatchError(BusinessError):
+    code = "currency_mismatch"
+    public_message = "The product currency does not match the quotation currency."
+
+
 class CustomerInformationRequiredError(BusinessError):
     code = "customer_information_required"
     public_message = "Customer information is required before creating a quotation."
@@ -116,6 +121,7 @@ __all__ = [
     "AgentExecutionError",
     "ApplicationError",
     "BusinessError",
+    "CurrencyMismatchError",
     "CustomerInformationRequiredError",
     "EmptyQuoteError",
     "InvalidConversationStateError",
