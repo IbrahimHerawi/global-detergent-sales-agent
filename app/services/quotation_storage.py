@@ -6,7 +6,7 @@ import os
 import re
 import secrets
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
@@ -59,7 +59,7 @@ class StoredQuotationArtifact:
 class QuotationArtifactStorage(Protocol):
     """Minimal replaceable boundary for quotation PDF persistence."""
 
-    def reserve(self) -> QuotationReservation:
+    def reserve(self, quotation_id: str | None = None) -> QuotationReservation:
         """Atomically reserve a fresh backend-generated quotation identifier."""
         ...
 
@@ -79,6 +79,10 @@ class QuotationArtifactStorage(Protocol):
         """Return whether a complete, valid artifact exists."""
         ...
 
+    def cancel(self, reservation: QuotationReservation) -> None:
+        """Release an unfinished reservation without touching final artifacts."""
+        ...
+
 
 class LocalQuotationStorage:
     """Store quotation PDFs beneath one configured local directory."""
@@ -87,7 +91,7 @@ class LocalQuotationStorage:
 
     def __init__(
         self,
-        id_factory: QuotationIdFactory,
+        id_factory: QuotationIdFactory | None = None,
         *,
         root: Path | None = None,
         max_reservation_attempts: int = _DEFAULT_MAX_RESERVATION_ATTEMPTS,
@@ -126,10 +130,21 @@ class LocalQuotationStorage:
             max_reservation_attempts=max_reservation_attempts,
         )
 
-    def reserve(self) -> QuotationReservation:
-        """Claim a unique quotation ID with an exclusive reservation file."""
-        for _ in range(self._max_reservation_attempts):
-            quotation_id = _validate_quotation_id(self._id_factory())
+    def reserve(self, quotation_id: str | None = None) -> QuotationReservation:
+        """Claim an exact ID or generate unique IDs with bounded retries."""
+        identifiers: Iterable[str]
+        if quotation_id is not None:
+            identifiers = (_validate_quotation_id(quotation_id),)
+        else:
+            if self._id_factory is None:
+                raise ValueError("quotation_id is required when no ID factory is configured")
+            identifiers = (
+                _validate_quotation_id(self._id_factory())
+                for _ in range(self._max_reservation_attempts)
+            )
+
+        for candidate_id in identifiers:
+            quotation_id = candidate_id
             final_path = self._path_for(quotation_id, _PDF_SUFFIX)
             reservation_path = self._path_for(quotation_id, _RESERVATION_SUFFIX)
             token = secrets.token_hex(16)
@@ -229,6 +244,20 @@ class LocalQuotationStorage:
         except QuotationStorageError:
             return False
         return True
+
+    def cancel(self, reservation: QuotationReservation) -> None:
+        """Remove only a matching unfinished reservation."""
+        if not isinstance(reservation, QuotationReservation):
+            raise TypeError("reservation must be created by quotation storage")
+        quotation_id = _validate_quotation_id(reservation.quotation_id)
+        reservation_path = self._path_for(quotation_id, _RESERVATION_SUFFIX)
+        if not reservation_path.exists():
+            return
+        self._verify_reservation(reservation, reservation_path)
+        try:
+            reservation_path.unlink()
+        except OSError as error:
+            raise _storage_error("cancel reservation", error) from error
 
     def _verify_reservation(
         self,

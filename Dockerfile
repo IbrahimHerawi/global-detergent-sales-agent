@@ -44,6 +44,13 @@ FROM dependency-builder AS development
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --all-groups --no-install-project
 
+# PDF acceptance tests use Poppler only in the development image for text
+# extraction, page metadata, and PNG rendering. Runtime PDF creation remains
+# WeasyPrint-only.
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY app ./app
 COPY src ./src
 COPY storage ./storage
