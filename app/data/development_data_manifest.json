@@ -1,0 +1,204 @@
+{
+  "manifest_version": "1.0",
+  "environment": "development",
+  "production_approved": false,
+  "business_review_required": true,
+  "notice": "Unverified development data. Replace or approve all business data before production use.",
+  "files": {
+    "company.json": {
+      "provenance": "MVP System Specification section 8 example, normalized to nested contact fields",
+      "verification_status": "unverified_source_example",
+      "unknown_fields": [
+        "contact.phone",
+        "contact.email",
+        "contact.website",
+        "contact.address"
+      ]
+    },
+    "products.json": {
+      "provenance": "Product names from MVP System Specification section 10; catalog values are development-only",
+      "verification_status": "synthetic_development_catalog",
+      "product_count": 10,
+      "intentionally_unknown_fields_for_all_products": [
+        "instructions",
+        "safety_information",
+        "technical_details.color",
+        "technical_details.fragrance",
+        "technical_details.ph",
+        "active_ingredients",
+        "recommended_surfaces",
+        "contact_time",
+        "dilution_ratio",
+        "certifications",
+        "approved_claims"
+      ]
+    },
+    "quotation_rules.json": {
+      "provenance": "Task 11 and MVP System Specification section 16 example",
+      "verification_status": "unverified_source_example",
+      "requires_business_approval": [
+        "currency",
+        "quotation_prefix",
+        "validity_days",
+        "default_discount_percent",
+        "tax_percent",
+        "terms"
+      ]
+    }
+  },
+  "products": [
+    {
+      "id": "GDF-MPC-001",
+      "name_source": "MVP System Specification section 10",
+      "synthetic_fields": [
+        "id",
+        "sku",
+        "category",
+        "short_description",
+        "description",
+        "packaging",
+        "price",
+        "keywords",
+        "active"
+      ]
+    },
+    {
+      "id": "GDF-FLC-001",
+      "name_source": "MVP System Specification sections 9 and 10",
+      "documented_example_fields": [
+        "id",
+        "sku",
+        "name",
+        "category",
+        "packaging",
+        "price"
+      ],
+      "synthetic_fields": [
+        "short_description",
+        "description",
+        "keywords",
+        "active"
+      ]
+    },
+    {
+      "id": "GDF-GLC-001",
+      "name_source": "MVP System Specification section 10",
+      "synthetic_fields": [
+        "id",
+        "sku",
+        "category",
+        "short_description",
+        "description",
+        "packaging",
+        "price",
+        "keywords",
+        "active"
+      ]
+    },
+    {
+      "id": "GDF-SDI-001",
+      "name_source": "MVP System Specification section 10",
+      "synthetic_fields": [
+        "id",
+        "sku",
+        "category",
+        "short_description",
+        "description",
+        "packaging",
+        "price",
+        "keywords",
+        "active"
+      ]
+    },
+    {
+      "id": "GDF-HSA-001",
+      "name_source": "MVP System Specification section 10",
+      "synthetic_fields": [
+        "id",
+        "sku",
+        "category",
+        "short_description",
+        "description",
+        "packaging",
+        "price",
+        "keywords",
+        "active"
+      ]
+    },
+    {
+      "id": "GDF-HWA-001",
+      "name_source": "MVP System Specification section 10",
+      "synthetic_fields": [
+        "id",
+        "sku",
+        "category",
+        "short_description",
+        "description",
+        "packaging",
+        "price",
+        "keywords",
+        "active"
+      ]
+    },
+    {
+      "id": "GDF-DWL-001",
+      "name_source": "MVP System Specification section 10",
+      "synthetic_fields": [
+        "id",
+        "sku",
+        "category",
+        "short_description",
+        "description",
+        "packaging",
+        "price",
+        "keywords",
+        "active"
+      ]
+    },
+    {
+      "id": "GDF-TBC-001",
+      "name_source": "MVP System Specification section 10",
+      "synthetic_fields": [
+        "id",
+        "sku",
+        "category",
+        "short_description",
+        "description",
+        "packaging",
+        "price",
+        "keywords",
+        "active"
+      ]
+    },
+    {
+      "id": "GDF-DEG-001",
+      "name_source": "MVP System Specification section 10",
+      "synthetic_fields": [
+        "id",
+        "sku",
+        "category",
+        "short_description",
+        "description",
+        "packaging",
+        "price",
+        "keywords",
+        "active"
+      ]
+    },
+    {
+      "id": "GDF-LDT-001",
+      "name_source": "MVP System Specification section 10",
+      "synthetic_fields": [
+        "id",
+        "sku",
+        "category",
+        "short_description",
+        "description",
+        "packaging",
+        "price",
+        "keywords",
+        "active"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "Global Detergent Factory",
+  "short_name": "GDF",
+  "description": "Global Detergent Factory provides cleaning, disinfecting, sanitizing, detergent and hygiene products for professional and general cleaning applications.",
+  "industries_served": [
+    "Facility management",
+    "Offices",
+    "Commercial buildings",
+    "Hospitality",
+    "General cleaning"
+  ],
+  "product_categories": [
+    "Cleaning Products",
+    "Detergents",
+    "Disinfectants",
+    "Sanitizers",
+    "Hand Hygiene"
+  ],
+  "currency": "QAR",
+  "contact": {
+    "phone": null,
+    "email": null,
+    "website": null,
+    "address": null
+  }
+}

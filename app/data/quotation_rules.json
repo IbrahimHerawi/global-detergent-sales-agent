@@ -1,0 +1,11 @@
+{
+  "currency": "QAR",
+  "quotation_prefix": "GDF-Q",
+  "validity_days": 30,
+  "default_discount_percent": "0.00",
+  "tax_percent": "0.00",
+  "terms": [
+    "Prices are valid for the quotation validity period.",
+    "Availability is subject to confirmation."
+  ]
+}

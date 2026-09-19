@@ -1,0 +1,372 @@
+[
+  {
+    "id": "GDF-MPC-001",
+    "sku": "MPC-5L",
+    "name": "GDF Multi-Purpose Cleaner",
+    "category": "General Cleaning",
+    "short_description": "Synthetic development entry for multi-purpose cleaner discovery.",
+    "description": "Synthetic development catalog description for a multi-purpose cleaner. Commercial and technical details require business review.",
+    "applications": [],
+    "packaging": {
+      "size": "5",
+      "unit": "L"
+    },
+    "price": {
+      "amount": "30.00",
+      "currency": "QAR"
+    },
+    "instructions": null,
+    "safety_information": null,
+    "technical_details": {
+      "color": null,
+      "fragrance": null,
+      "ph": null
+    },
+    "active_ingredients": [],
+    "recommended_surfaces": [],
+    "contact_time": null,
+    "dilution_ratio": null,
+    "certifications": [],
+    "approved_claims": [],
+    "keywords": [
+      "multi-purpose cleaner",
+      "multipurpose cleaner",
+      "general cleaning",
+      "MPC"
+    ],
+    "active": true
+  },
+  {
+    "id": "GDF-FLC-001",
+    "sku": "FLC-5L",
+    "name": "GDF Floor Cleaner",
+    "category": "Floor Cleaning",
+    "short_description": "Synthetic development entry for floor cleaner discovery.",
+    "description": "Synthetic development catalog description for a floor cleaner. Commercial and technical details require business review.",
+    "applications": [],
+    "packaging": {
+      "size": "5",
+      "unit": "L"
+    },
+    "price": {
+      "amount": "25.00",
+      "currency": "QAR"
+    },
+    "instructions": null,
+    "safety_information": null,
+    "technical_details": {
+      "color": null,
+      "fragrance": null,
+      "ph": null
+    },
+    "active_ingredients": [],
+    "recommended_surfaces": [],
+    "contact_time": null,
+    "dilution_ratio": null,
+    "certifications": [],
+    "approved_claims": [],
+    "keywords": [
+      "floor cleaner",
+      "floor cleaning",
+      "floors",
+      "FLC"
+    ],
+    "active": true
+  },
+  {
+    "id": "GDF-GLC-001",
+    "sku": "GLC-5L",
+    "name": "GDF Glass Cleaner",
+    "category": "Glass Cleaning",
+    "short_description": "Synthetic development entry for glass cleaner discovery.",
+    "description": "Synthetic development catalog description for a glass cleaner. Commercial and technical details require business review.",
+    "applications": [],
+    "packaging": {
+      "size": "5",
+      "unit": "L"
+    },
+    "price": {
+      "amount": "22.00",
+      "currency": "QAR"
+    },
+    "instructions": null,
+    "safety_information": null,
+    "technical_details": {
+      "color": null,
+      "fragrance": null,
+      "ph": null
+    },
+    "active_ingredients": [],
+    "recommended_surfaces": [],
+    "contact_time": null,
+    "dilution_ratio": null,
+    "certifications": [],
+    "approved_claims": [],
+    "keywords": [
+      "glass cleaner",
+      "glass cleaning",
+      "glass",
+      "GLC"
+    ],
+    "active": true
+  },
+  {
+    "id": "GDF-SDI-001",
+    "sku": "SDI-5L",
+    "name": "GDF Surface Disinfectant",
+    "category": "Disinfectants",
+    "short_description": "Synthetic development entry for surface disinfectant discovery.",
+    "description": "Synthetic development catalog description for a surface disinfectant. No efficacy or approval claim is supplied.",
+    "applications": [],
+    "packaging": {
+      "size": "5",
+      "unit": "L"
+    },
+    "price": {
+      "amount": "40.00",
+      "currency": "QAR"
+    },
+    "instructions": null,
+    "safety_information": null,
+    "technical_details": {
+      "color": null,
+      "fragrance": null,
+      "ph": null
+    },
+    "active_ingredients": [],
+    "recommended_surfaces": [],
+    "contact_time": null,
+    "dilution_ratio": null,
+    "certifications": [],
+    "approved_claims": [],
+    "keywords": [
+      "surface disinfectant",
+      "disinfectant",
+      "disinfection",
+      "SDI"
+    ],
+    "active": true
+  },
+  {
+    "id": "GDF-HSA-001",
+    "sku": "HSA-500ML",
+    "name": "GDF Hand Sanitizer",
+    "category": "Hand Hygiene",
+    "short_description": "Synthetic development entry for hand sanitizer discovery.",
+    "description": "Synthetic development catalog description for a hand sanitizer. No efficacy or approval claim is supplied.",
+    "applications": [],
+    "packaging": {
+      "size": "500",
+      "unit": "mL"
+    },
+    "price": {
+      "amount": "15.00",
+      "currency": "QAR"
+    },
+    "instructions": null,
+    "safety_information": null,
+    "technical_details": {
+      "color": null,
+      "fragrance": null,
+      "ph": null
+    },
+    "active_ingredients": [],
+    "recommended_surfaces": [],
+    "contact_time": null,
+    "dilution_ratio": null,
+    "certifications": [],
+    "approved_claims": [],
+    "keywords": [
+      "hand sanitizer",
+      "sanitizer",
+      "hand hygiene",
+      "HSA"
+    ],
+    "active": true
+  },
+  {
+    "id": "GDF-HWA-001",
+    "sku": "HWA-5L",
+    "name": "GDF Hand Wash",
+    "category": "Hand Hygiene",
+    "short_description": "Synthetic development entry for hand wash discovery.",
+    "description": "Synthetic development catalog description for a hand wash. Commercial and technical details require business review.",
+    "applications": [],
+    "packaging": {
+      "size": "5",
+      "unit": "L"
+    },
+    "price": {
+      "amount": "28.00",
+      "currency": "QAR"
+    },
+    "instructions": null,
+    "safety_information": null,
+    "technical_details": {
+      "color": null,
+      "fragrance": null,
+      "ph": null
+    },
+    "active_ingredients": [],
+    "recommended_surfaces": [],
+    "contact_time": null,
+    "dilution_ratio": null,
+    "certifications": [],
+    "approved_claims": [],
+    "keywords": [
+      "hand wash",
+      "hand soap",
+      "hand hygiene",
+      "HWA"
+    ],
+    "active": true
+  },
+  {
+    "id": "GDF-DWL-001",
+    "sku": "DWL-5L",
+    "name": "GDF Dishwashing Liquid",
+    "category": "Dishwashing",
+    "short_description": "Synthetic development entry for dishwashing liquid discovery.",
+    "description": "Synthetic development catalog description for a dishwashing liquid. Commercial and technical details require business review.",
+    "applications": [],
+    "packaging": {
+      "size": "5",
+      "unit": "L"
+    },
+    "price": {
+      "amount": "24.00",
+      "currency": "QAR"
+    },
+    "instructions": null,
+    "safety_information": null,
+    "technical_details": {
+      "color": null,
+      "fragrance": null,
+      "ph": null
+    },
+    "active_ingredients": [],
+    "recommended_surfaces": [],
+    "contact_time": null,
+    "dilution_ratio": null,
+    "certifications": [],
+    "approved_claims": [],
+    "keywords": [
+      "dishwashing liquid",
+      "dish wash",
+      "dishwashing",
+      "DWL"
+    ],
+    "active": true
+  },
+  {
+    "id": "GDF-TBC-001",
+    "sku": "TBC-5L",
+    "name": "GDF Toilet & Bathroom Cleaner",
+    "category": "Bathroom Cleaning",
+    "short_description": "Synthetic development entry for toilet and bathroom cleaner discovery.",
+    "description": "Synthetic development catalog description for a toilet and bathroom cleaner. Commercial and technical details require business review.",
+    "applications": [],
+    "packaging": {
+      "size": "5",
+      "unit": "L"
+    },
+    "price": {
+      "amount": "27.00",
+      "currency": "QAR"
+    },
+    "instructions": null,
+    "safety_information": null,
+    "technical_details": {
+      "color": null,
+      "fragrance": null,
+      "ph": null
+    },
+    "active_ingredients": [],
+    "recommended_surfaces": [],
+    "contact_time": null,
+    "dilution_ratio": null,
+    "certifications": [],
+    "approved_claims": [],
+    "keywords": [
+      "toilet cleaner",
+      "bathroom cleaner",
+      "toilet and bathroom cleaner",
+      "TBC"
+    ],
+    "active": true
+  },
+  {
+    "id": "GDF-DEG-001",
+    "sku": "DEG-5L",
+    "name": "GDF Degreaser",
+    "category": "Degreasers",
+    "short_description": "Synthetic development entry for degreaser discovery.",
+    "description": "Synthetic development catalog description for a degreaser. Commercial and technical details require business review.",
+    "applications": [],
+    "packaging": {
+      "size": "5",
+      "unit": "L"
+    },
+    "price": {
+      "amount": "35.00",
+      "currency": "QAR"
+    },
+    "instructions": null,
+    "safety_information": null,
+    "technical_details": {
+      "color": null,
+      "fragrance": null,
+      "ph": null
+    },
+    "active_ingredients": [],
+    "recommended_surfaces": [],
+    "contact_time": null,
+    "dilution_ratio": null,
+    "certifications": [],
+    "approved_claims": [],
+    "keywords": [
+      "degreaser",
+      "degreasing",
+      "grease cleaner",
+      "DEG"
+    ],
+    "active": true
+  },
+  {
+    "id": "GDF-LDT-001",
+    "sku": "LDT-5L",
+    "name": "GDF Laundry Detergent",
+    "category": "Laundry",
+    "short_description": "Synthetic development entry for laundry detergent discovery.",
+    "description": "Synthetic development catalog description for a laundry detergent. Commercial and technical details require business review.",
+    "applications": [],
+    "packaging": {
+      "size": "5",
+      "unit": "L"
+    },
+    "price": {
+      "amount": "32.00",
+      "currency": "QAR"
+    },
+    "instructions": null,
+    "safety_information": null,
+    "technical_details": {
+      "color": null,
+      "fragrance": null,
+      "ph": null
+    },
+    "active_ingredients": [],
+    "recommended_surfaces": [],
+    "contact_time": null,
+    "dilution_ratio": null,
+    "certifications": [],
+    "approved_claims": [],
+    "keywords": [
+      "laundry detergent",
+      "laundry",
+      "detergent",
+      "LDT"
+    ],
+    "active": true
+  }
+]
