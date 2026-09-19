@@ -5,8 +5,10 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Final
+from pathlib import Path
+from typing import Final, Protocol
 from uuid import UUID
 
 from app.core.exceptions import (
@@ -20,9 +22,15 @@ from app.core.exceptions import (
 from app.repositories.product_repository import ProductRepository
 from app.repositories.quotation_rules_repository import QuotationRulesRepository
 from app.schemas.product import Product
-from app.schemas.quotation import CustomerInfo, QuoteCartItem, QuotePreview
-from app.schemas.session import ConversationSession, ConversationState
+from app.schemas.quotation import CustomerInfo, GeneratedQuotation, QuoteCartItem, QuotePreview
+from app.schemas.session import (
+    ConversationSession,
+    ConversationState,
+    GeneratedQuoteReplayMetadata,
+)
+from app.services.pdf_service import PDFService
 from app.services.quotation_calculator import QuotationCalculator
+from app.services.quotation_id import generate_quotation_id
 
 NAME_MAX_LENGTH: Final = 200
 EMAIL_MAX_LENGTH: Final = 254
@@ -68,6 +76,16 @@ class CurrentTurnContext:
 
 
 ConfirmationInterpreter = Callable[[str], ConfirmationInterpretation]
+Clock = Callable[[], datetime]
+QuotationIdFactory = Callable[[str, datetime], str]
+
+
+class QuotationPDFGenerator(Protocol):
+    """Trusted boundary that creates the final quotation artifact."""
+
+    async def generate_quotation_pdf(self, quotation: GeneratedQuotation) -> Path:
+        """Create one PDF and return its internal storage path."""
+        ...
 
 
 class QuotationService:
@@ -75,8 +93,11 @@ class QuotationService:
 
     __slots__ = (
         "_calculator",
+        "_clock",
         "_confirmation_interpreter",
+        "_pdf_service",
         "_product_repository",
+        "_quotation_id_factory",
         "_rules_repository",
     )
 
@@ -85,6 +106,9 @@ class QuotationService:
         product_repository: ProductRepository | None = None,
         rules_repository: QuotationRulesRepository | None = None,
         confirmation_interpreter: ConfirmationInterpreter | None = None,
+        pdf_service: QuotationPDFGenerator | None = None,
+        clock: Clock | None = None,
+        quotation_id_factory: QuotationIdFactory | None = None,
     ) -> None:
         self._product_repository = (
             product_repository if product_repository is not None else ProductRepository()
@@ -100,6 +124,13 @@ class QuotationService:
             confirmation_interpreter
             if confirmation_interpreter is not None
             else _interpret_conservative_confirmation
+        )
+        self._pdf_service = pdf_service
+        self._clock = clock if clock is not None else _utc_now
+        self._quotation_id_factory = (
+            quotation_id_factory
+            if quotation_id_factory is not None
+            else _generate_backend_quotation_id
         )
 
     def add_item(
@@ -321,6 +352,91 @@ class QuotationService:
                 "The current quotation has no preserved explicit confirmation evidence"
             )
 
+    async def generate(self, session: ConversationSession) -> GeneratedQuotation:
+        """Generate or replay the quotation bound to the confirmed preview.
+
+        All commercial values are recalculated from backend repositories. The
+        session is committed only after the PDF service returns successfully,
+        so a rendering or storage failure leaves the confirmed preview
+        recoverable for a later retry.
+        """
+        replay = self._replay_generated_quotation(session)
+        if replay is not None:
+            return replay
+
+        # Revalidate every authorization and commercial input immediately
+        # before freezing the object passed to the PDF boundary.
+        self.validate_generation_authorization(session)
+        preview = self._calculate_preview(session)
+        quote_fingerprint = self._current_quote_fingerprint(session)
+        if quote_fingerprint != session.prepared_preview_fingerprint:
+            raise StalePreviewError("Quotation inputs changed before generation")
+
+        rules = self._rules_repository.get_rules()
+        issued_at = _normalize_generation_time(self._clock())
+        quotation_id = self._quotation_id_factory(rules.quotation_prefix, issued_at)
+        quotation = _build_generated_quotation(
+            preview,
+            quotation_id=quotation_id,
+            issued_at=issued_at,
+        )
+
+        pdf_service = self._pdf_service
+        if pdf_service is None:
+            pdf_service = PDFService()
+        pdf_path = await pdf_service.generate_quotation_pdf(quotation)
+        generated = _build_generated_quotation(
+            preview,
+            quotation_id=quotation_id,
+            issued_at=issued_at,
+            pdf_path=str(pdf_path),
+        )
+        confirmation_turn_id = session.confirmation_turn_id
+        if confirmation_turn_id is None:  # guarded above; fail closed if state was mutated
+            raise QuoteNotConfirmedError("Confirmation evidence disappeared during generation")
+        replay_metadata = GeneratedQuoteReplayMetadata(
+            quotation_id=quotation_id,
+            quote_fingerprint=quote_fingerprint,
+            confirmation_turn_id=confirmation_turn_id,
+            pdf_path=str(pdf_path),
+            generated_at=issued_at,
+        )
+
+        # These are the only success mutations and occur after PDF creation.
+        session.last_generated_quote = replay_metadata
+        session.last_quotation_id = quotation_id
+        session.state = ConversationState.QUOTE_GENERATED
+        return generated
+
+    def _replay_generated_quotation(
+        self,
+        session: ConversationSession,
+    ) -> GeneratedQuotation | None:
+        """Recreate the immutable successful snapshot without another PDF."""
+        metadata = session.last_generated_quote
+        if metadata is None:
+            return None
+
+        preview = self._calculate_preview(session)
+        self.validate_customer_information(session)
+        current_fingerprint = self._current_quote_fingerprint(session)
+        if (
+            session.state is not ConversationState.QUOTE_GENERATED
+            or session.last_quotation_id != metadata.quotation_id
+            or session.prepared_preview_fingerprint != metadata.quote_fingerprint
+            or current_fingerprint != metadata.quote_fingerprint
+            or session.confirmation_turn_id != metadata.confirmation_turn_id
+            or not session.quote_confirmed
+        ):
+            raise StalePreviewError("Generated quotation replay binding is stale")
+
+        return _build_generated_quotation(
+            preview,
+            quotation_id=metadata.quotation_id,
+            issued_at=metadata.generated_at,
+            pdf_path=metadata.pdf_path,
+        )
+
     def _validate_current_delivered_preview(
         self,
         session: ConversationSession,
@@ -486,6 +602,38 @@ def _interpret_conservative_confirmation(message: str) -> ConfirmationInterpreta
     return ConfirmationInterpretation.AMBIGUOUS
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _normalize_generation_time(value: datetime) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("quotation generation clock must return a timezone-aware datetime")
+    return value.astimezone(UTC)
+
+
+def _generate_backend_quotation_id(prefix: str, issued_at: datetime) -> str:
+    return generate_quotation_id(prefix, now=issued_at)
+
+
+def _build_generated_quotation(
+    preview: QuotePreview,
+    *,
+    quotation_id: str,
+    issued_at: datetime,
+    pdf_path: str | None = None,
+) -> GeneratedQuotation:
+    quotation_data = {
+        **preview.model_dump(mode="python"),
+        "quotation_id": quotation_id,
+        "issued_at": issued_at,
+        "valid_until": issued_at.date() + timedelta(days=preview.validity_days),
+    }
+    if pdf_path is None:
+        return GeneratedQuotation.model_validate(quotation_data)
+    return GeneratedQuotation.with_pdf_path(pdf_path=pdf_path, **quotation_data)
+
+
 def _preview_text(preview: QuotePreview) -> str:
     """Render all preview facts in a stable, transport-independent format."""
     customer = preview.customer
@@ -568,5 +716,6 @@ __all__ = [
     "NOTES_MAX_LENGTH",
     "ConfirmationInterpretation",
     "CurrentTurnContext",
+    "QuotationPDFGenerator",
     "QuotationService",
 ]
