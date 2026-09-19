@@ -7,6 +7,7 @@ from io import StringIO
 from typing import Any
 
 import pytest
+
 from app.core.exceptions import WhatsAppAPIError
 from app.core.logging import JsonFormatter, log_context, log_tool_result, mask_phone_number
 
