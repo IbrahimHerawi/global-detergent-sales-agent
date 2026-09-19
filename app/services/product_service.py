@@ -103,10 +103,16 @@ class ProductService:
         )
         return {"products": [_product_summary(product) for product in products]}
 
-    def search_products(self, query: str) -> ProductSearchOutput:
+    def search_products(
+        self,
+        query: str,
+        category: str | None = None,
+    ) -> ProductSearchOutput:
         """Return deterministic repository search results as concise summaries."""
         return {
-            "matches": [_product_summary(product) for product in self._repository.search(query)]
+            "matches": [
+                _product_summary(product) for product in self._repository.search(query, category)
+            ]
         }
 
     def get_product_details(self, product_id: str) -> ProductDetailsOutput:

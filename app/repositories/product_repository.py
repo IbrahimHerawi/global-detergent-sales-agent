@@ -107,15 +107,25 @@ class ProductRepository:
         )
         return _copy_products(matches)
 
-    def search(self, query: str) -> list[Product]:
-        """Return up to five active products ranked by deterministic catalog matches."""
+    def search(self, query: str, category: str | None = None) -> list[Product]:
+        """Return up to five ranked active matches, optionally within a category."""
         normalized_query = _normalize_search_text(query)
         if not normalized_query:
             return []
 
+        if category is None:
+            candidates = self._active_products
+        else:
+            normalized_category = _normalize_category(category)
+            candidates = tuple(
+                product
+                for product in self._active_products
+                if _normalize_category(product.category) == normalized_category
+            )
+
         ranked_matches = (
             (score, product.id, product)
-            for product in self._active_products
+            for product in candidates
             if (score := _search_score(product, normalized_query)) > 0
         )
         ordered_matches = sorted(ranked_matches, key=lambda match: (-match[0], match[1]))
