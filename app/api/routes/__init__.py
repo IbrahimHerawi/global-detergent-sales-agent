@@ -1,6 +1,7 @@
 """API route package."""
 
+from app.api.routes.dev_chat import router as dev_chat_router
 from app.api.routes.health import router as health_router
 from app.api.routes.products import router as products_router
 
-__all__ = ["health_router", "products_router"]
+__all__ = ["dev_chat_router", "health_router", "products_router"]
