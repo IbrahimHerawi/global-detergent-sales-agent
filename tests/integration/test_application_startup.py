@@ -123,13 +123,17 @@ async def test_valid_startup_exposes_docs_health_and_reusable_resources_then_clo
             docs_response = await client.get("/docs")
             schema_response = await client.get("/openapi.json")
             health_response = await client.get("/health", headers={REQUEST_ID_HEADER: "test-42"})
+            ready_response = await client.get("/health/ready")
 
         assert docs_response.status_code == 200
         assert docs_response.headers["content-type"].startswith("text/html")
         assert schema_response.json()["info"] == {"title": APP_TITLE, "version": APP_VERSION}
         assert "/health" in schema_response.json()["paths"]
-        assert health_response.json() == {"status": "ok"}
+        assert "/health/ready" in schema_response.json()["paths"]
+        assert health_response.json() == {"status": "ok", "service": "gdf-sales-agent"}
         assert health_response.headers[REQUEST_ID_HEADER] == "test-42"
+        assert ready_response.status_code == 200
+        assert ready_response.json() == {"status": "ready", "service": "gdf-sales-agent"}
         http_client = resources.http_client
 
     assert app.state.resources is None
