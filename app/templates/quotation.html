@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Quotation {{ quotation.quotation_id | e }}</title>
+    <style>
+      @page {
+        size: A4;
+        margin: 16mm 14mm 18mm;
+
+        @bottom-left {
+          color: #64748b;
+          content: "{{ company.short_name | e }} · Quotation {{ quotation.quotation_id | e }}";
+          font-family: "DejaVu Sans", Arial, sans-serif;
+          font-size: 8pt;
+        }
+
+        @bottom-right {
+          color: #64748b;
+          content: "Page " counter(page) " of " counter(pages);
+          font-family: "DejaVu Sans", Arial, sans-serif;
+          font-size: 8pt;
+        }
+      }
+
+      :root {
+        color: #172033;
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 9.5pt;
+        line-height: 1.45;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: #ffffff;
+        color: #172033;
+      }
+
+      .document-header {
+        align-items: flex-start;
+        border-bottom: 2px solid #0f766e;
+        display: flex;
+        gap: 8mm;
+        justify-content: space-between;
+        margin-bottom: 7mm;
+        padding-bottom: 5mm;
+      }
+
+      .brand {
+        align-items: center;
+        display: flex;
+        gap: 5mm;
+        min-width: 0;
+      }
+
+      .brand-logo {
+        display: block;
+        flex: 0 0 auto;
+        max-height: 22mm;
+        max-width: 42mm;
+        object-fit: contain;
+      }
+
+      .brand-name,
+      .quotation-title,
+      .section-title,
+      .meta-value,
+      td,
+      dd,
+      li,
+      address {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
+      .brand-name {
+        color: #0f4c45;
+        font-size: 16pt;
+        font-weight: 700;
+        line-height: 1.2;
+        margin: 0 0 1.5mm;
+      }
+
+      .company-contact {
+        color: #475569;
+        font-size: 8.5pt;
+        font-style: normal;
+        line-height: 1.4;
+        margin: 0;
+      }
+
+      .title-block {
+        flex: 0 0 63mm;
+        text-align: right;
+      }
+
+      .quotation-title {
+        color: #0f766e;
+        font-size: 22pt;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        line-height: 1;
+        margin: 0 0 4mm;
+      }
+
+      .quote-meta {
+        display: grid;
+        gap: 1.2mm 4mm;
+        grid-template-columns: auto 1fr;
+        margin: 0;
+      }
+
+      .quote-meta dt {
+        color: #64748b;
+        font-size: 8pt;
+        font-weight: 600;
+        margin: 0;
+        text-transform: uppercase;
+      }
+
+      .quote-meta dd {
+        font-weight: 600;
+        margin: 0;
+      }
+
+      .customer-card {
+        background: #f1f7f6;
+        border-left: 3px solid #0f766e;
+        margin-bottom: 7mm;
+        padding: 4mm 5mm;
+      }
+
+      .section-title {
+        color: #0f4c45;
+        font-size: 10pt;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        margin: 0 0 2.5mm;
+        text-transform: uppercase;
+      }
+
+      .customer-grid {
+        font-size: 0;
+        margin: 0;
+      }
+
+      .customer-field {
+        break-inside: avoid;
+        display: inline-block;
+        font-size: 9.5pt;
+        margin: 0;
+        min-width: 0;
+        padding: 0 7mm 1.8mm 0;
+        vertical-align: top;
+        width: 50%;
+      }
+
+      .customer-field.wide {
+        width: 100%;
+      }
+
+      .field-label {
+        color: #64748b;
+        display: block;
+        font-size: 7.5pt;
+        font-weight: 600;
+        margin-bottom: 0.4mm;
+        text-transform: uppercase;
+      }
+
+      .field-value {
+        display: block;
+        max-width: 100%;
+        overflow-wrap: break-word;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+
+      .items-table {
+        border-collapse: collapse;
+        table-layout: fixed;
+        width: 100%;
+      }
+
+      .items-table col.item-number {
+        width: 7%;
+      }
+
+      .items-table col.description {
+        width: 37%;
+      }
+
+      .items-table col.sku {
+        width: 16%;
+      }
+
+      .items-table col.quantity {
+        width: 10%;
+      }
+
+      .items-table col.unit-price,
+      .items-table col.line-total {
+        width: 15%;
+      }
+
+      .items-table thead {
+        display: table-header-group;
+      }
+
+      .items-table tr {
+        break-inside: avoid;
+      }
+
+      .items-table th {
+        background: #0f4c45;
+        border: 1px solid #0f4c45;
+        color: #ffffff;
+        font-size: 7.5pt;
+        font-weight: 700;
+        padding: 2.5mm 2mm;
+        text-align: left;
+        text-transform: uppercase;
+        vertical-align: bottom;
+      }
+
+      .items-table td {
+        border: 1px solid #cbd5e1;
+        padding: 2.7mm 2mm;
+        vertical-align: top;
+      }
+
+      .items-table tbody tr:nth-child(even) {
+        background: #f8fafc;
+      }
+
+      .numeric {
+        font-variant-numeric: tabular-nums;
+        text-align: right !important;
+        white-space: nowrap;
+      }
+
+      .sku-value {
+        font-family: "DejaVu Sans Mono", "Courier New", monospace;
+        font-size: 8.5pt;
+      }
+
+      .summary {
+        break-inside: avoid;
+        display: flex;
+        justify-content: flex-end;
+        margin: 5mm 0 7mm;
+      }
+
+      .totals {
+        border-collapse: collapse;
+        font-variant-numeric: tabular-nums;
+        min-width: 78mm;
+      }
+
+      .totals th,
+      .totals td {
+        border-bottom: 1px solid #dbe3ea;
+        padding: 1.7mm 2.5mm;
+      }
+
+      .totals th {
+        color: #475569;
+        font-weight: 600;
+        text-align: left;
+      }
+
+      .totals td {
+        text-align: right;
+        white-space: nowrap;
+      }
+
+      .totals .grand-total th,
+      .totals .grand-total td {
+        background: #e2f2ef;
+        border-bottom: 0;
+        color: #0f4c45;
+        font-size: 11pt;
+        font-weight: 800;
+        padding-bottom: 2.5mm;
+        padding-top: 2.5mm;
+      }
+
+      .currency-note {
+        color: #64748b;
+        font-size: 8pt;
+        margin: -4mm 0 7mm;
+        text-align: right;
+      }
+
+      .terms {
+        border-top: 1px solid #cbd5e1;
+        break-inside: avoid;
+        padding-top: 4mm;
+      }
+
+      .terms ol {
+        margin: 0;
+        padding-left: 5mm;
+      }
+
+      .terms li {
+        margin-bottom: 1.5mm;
+        padding-left: 1mm;
+      }
+
+      @media print {
+        body {
+          print-color-adjust: exact;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="document-header">
+      <div class="brand">
+        {% if logo_data_uri %}
+          <img class="brand-logo" src="{{ logo_data_uri | e }}" alt="{{ company.name | e }} logo">
+        {% endif %}
+        <div>
+          <p class="brand-name">{{ company.name | e }}</p>
+          {% if company.contact.address or company.contact.phone or company.contact.email or company.contact.website %}
+            <address class="company-contact">
+              {% if company.contact.address %}<div>{{ company.contact.address | trim | e }}</div>{% endif %}
+              {% if company.contact.phone %}<div>{{ company.contact.phone | trim | e }}</div>{% endif %}
+              {% if company.contact.email %}<div>{{ company.contact.email | trim | e }}</div>{% endif %}
+              {% if company.contact.website %}<div>{{ company.contact.website | trim | e }}</div>{% endif %}
+            </address>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="title-block">
+        <h1 class="quotation-title">QUOTATION</h1>
+        <dl class="quote-meta">
+          <dt>Quotation no.</dt>
+          <dd class="meta-value">{{ quotation.quotation_id | e }}</dd>
+          <dt>Issue date</dt>
+          <dd>{{ quotation.issued_at.strftime("%Y-%m-%d") | e }}</dd>
+          <dt>Valid until</dt>
+          <dd>{{ quotation.valid_until.strftime("%Y-%m-%d") | e }}</dd>
+        </dl>
+      </div>
+    </header>
+
+    <section class="customer-card">
+      <h2 class="section-title">Prepared for</h2>
+      <div class="customer-grid">
+        {% if quotation.customer.company_name and quotation.customer.company_name | trim %}
+          <p class="customer-field">
+            <span class="field-label">Company</span>
+            <span class="field-value">{{ quotation.customer.company_name | trim | e }}</span>
+          </p>
+        {% endif %}
+        {% if quotation.customer.name and quotation.customer.name | trim %}
+          <p class="customer-field">
+            <span class="field-label">Customer name</span>
+            <span class="field-value">{{ quotation.customer.name | trim | e }}</span>
+          </p>
+        {% endif %}
+        {% if quotation.customer.contact_person and quotation.customer.contact_person | trim %}
+          <p class="customer-field">
+            <span class="field-label">Contact person</span>
+            <span class="field-value">{{ quotation.customer.contact_person | trim | e }}</span>
+          </p>
+        {% endif %}
+        <p class="customer-field">
+          <span class="field-label">Phone</span>
+          <span class="field-value">{{ quotation.customer.phone | trim | e }}</span>
+        </p>
+        {% if quotation.customer.email and quotation.customer.email | trim %}
+          <p class="customer-field">
+            <span class="field-label">Email</span>
+            <span class="field-value">{{ quotation.customer.email | trim | e }}</span>
+          </p>
+        {% endif %}
+        {% if quotation.customer.address and quotation.customer.address | trim %}
+          <p class="customer-field wide">
+            <span class="field-label">Address</span>
+            <span class="field-value">{{ quotation.customer.address | trim | e }}</span>
+          </p>
+        {% endif %}
+        {% if quotation.customer.notes and quotation.customer.notes | trim %}
+          <p class="customer-field wide">
+            <span class="field-label">Notes</span>
+            <span class="field-value">{{ quotation.customer.notes | trim | e }}</span>
+          </p>
+        {% endif %}
+      </div>
+    </section>
+
+    <section>
+      <h2 class="section-title">Products</h2>
+      <table class="items-table">
+        <colgroup>
+          <col class="item-number">
+          <col class="description">
+          <col class="sku">
+          <col class="quantity">
+          <col class="unit-price">
+          <col class="line-total">
+        </colgroup>
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">Description</th>
+            <th scope="col">SKU</th>
+            <th scope="col" class="numeric">Qty</th>
+            <th scope="col" class="numeric">Unit price</th>
+            <th scope="col" class="numeric">Line total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in quotation.items %}
+            <tr>
+              <td>{{ loop.index }}</td>
+              <td>{{ item.description | e }}</td>
+              <td class="sku-value">{{ item.sku | e }}</td>
+              <td class="numeric">{{ item.quantity }}</td>
+              <td class="numeric">{{ quotation.totals.currency | e }} {{ "%.2f" | format(item.unit_price) }}</td>
+              <td class="numeric">{{ quotation.totals.currency | e }} {{ "%.2f" | format(item.subtotal) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="summary" aria-label="Quotation totals">
+      <table class="totals">
+        <tbody>
+          <tr>
+            <th scope="row">Subtotal</th>
+            <td>{{ quotation.totals.currency | e }} {{ "%.2f" | format(quotation.totals.subtotal) }}</td>
+          </tr>
+          <tr>
+            <th scope="row">Discount</th>
+            <td>{{ quotation.totals.currency | e }} {{ "%.2f" | format(quotation.totals.discount) }}</td>
+          </tr>
+          <tr>
+            <th scope="row">Tax</th>
+            <td>{{ quotation.totals.currency | e }} {{ "%.2f" | format(quotation.totals.tax) }}</td>
+          </tr>
+          <tr class="grand-total">
+            <th scope="row">Total</th>
+            <td>{{ quotation.totals.currency | e }} {{ "%.2f" | format(quotation.totals.total) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+    <p class="currency-note">All amounts are in {{ quotation.totals.currency | e }}.</p>
+
+    <section class="terms">
+      <h2 class="section-title">Terms</h2>
+      <ol>
+        {% for term in quotation.terms %}
+          <li>{{ term | e }}</li>
+        {% endfor %}
+      </ol>
+    </section>
+  </body>
+</html>
