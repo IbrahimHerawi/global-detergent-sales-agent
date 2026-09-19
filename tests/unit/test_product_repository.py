@@ -18,6 +18,9 @@ def product_payload(
     sku: str = "ACT-5L",
     name: str = "Active Product",
     category: str = "Floor Cleaning",
+    short_description: str | None = None,
+    applications: list[str] | None = None,
+    keywords: list[str] | None = None,
     active: bool = True,
 ) -> dict[str, object]:
     """Return a minimal valid product fixture."""
@@ -26,11 +29,12 @@ def product_payload(
         "sku": sku,
         "name": name,
         "category": category,
-        "short_description": f"Development entry for {name}.",
+        "short_description": short_description or f"Development entry for {name}.",
         "description": f"Synthetic development description for {name}.",
+        "applications": applications or [],
         "packaging": {"size": "5", "unit": "L"},
         "price": {"amount": "25.00", "currency": "QAR"},
-        "keywords": [name.casefold()],
+        "keywords": keywords or [name.casefold()],
         "active": active,
     }
 
@@ -244,8 +248,161 @@ def test_repository_exposes_only_required_read_operations() -> None:
         "get_by_category",
         "get_by_id",
         "get_by_sku",
+        "search",
     }
-    assert "search" not in public_methods
+
+
+def test_search_normalizes_case_unicode_punctuation_and_whitespace(tmp_path: Path) -> None:
+    path = tmp_path / "products.json"
+    write_products(
+        path,
+        [
+            product_payload(
+                product_id="P-UNICODE",
+                sku="UNI-1L",
+                name="Ｃａｆé—Straße Cleaner",
+            )
+        ],
+    )
+    repository = ProductRepository(path)
+
+    assert [product.id for product in repository.search("  CAFÉ - STRASSE   cleaner  ")] == [
+        "P-UNICODE"
+    ]
+
+
+def test_exact_sku_ranks_before_exact_name_and_other_match_tiers(tmp_path: Path) -> None:
+    path = tmp_path / "products.json"
+    write_products(
+        path,
+        [
+            product_payload(product_id="P-CATEGORY", sku="CAT-1", category="Target"),
+            product_payload(product_id="P-KEYWORD", sku="KEY-1", name="Other", keywords=["target"]),
+            product_payload(product_id="P-NAME-PHRASE", sku="NAM-1", name="Target Cleaner"),
+            product_payload(product_id="P-EXACT-NAME", sku="EXN-1", name="Target"),
+            product_payload(product_id="P-EXACT-SKU", sku="TARGET", name="SKU Product"),
+        ],
+    )
+    repository = ProductRepository(path)
+
+    assert [product.id for product in repository.search("target")] == [
+        "P-EXACT-SKU",
+        "P-EXACT-NAME",
+        "P-NAME-PHRASE",
+        "P-KEYWORD",
+        "P-CATEGORY",
+    ]
+
+
+def test_search_uses_applications_and_short_description(tmp_path: Path) -> None:
+    path = tmp_path / "products.json"
+    write_products(
+        path,
+        [
+            product_payload(
+                product_id="P-APPLICATION",
+                sku="APP-1",
+                name="First",
+                category="Other",
+                applications=["food preparation areas"],
+            ),
+            product_payload(
+                product_id="P-DESCRIPTION",
+                sku="DESC-1",
+                name="Second",
+                category="Other",
+                short_description="For food preparation areas.",
+            ),
+        ],
+    )
+    repository = ProductRepository(path)
+
+    assert [product.id for product in repository.search("food preparation")] == [
+        "P-APPLICATION",
+        "P-DESCRIPTION",
+    ]
+
+
+def test_multiword_token_search_finds_sample_floor_cleaner() -> None:
+    repository = ProductRepository()
+
+    matches = repository.search("office floor cleaning")
+
+    assert matches
+    assert matches[0].id == "GDF-FLC-001"
+
+
+def test_search_ties_are_broken_by_product_id(tmp_path: Path) -> None:
+    path = tmp_path / "products.json"
+    write_products(
+        path,
+        [
+            product_payload(product_id="P-003", sku="THREE", name="Third", keywords=["shared"]),
+            product_payload(product_id="P-001", sku="ONE", name="First", keywords=["shared"]),
+            product_payload(product_id="P-002", sku="TWO", name="Second", keywords=["shared"]),
+        ],
+    )
+    repository = ProductRepository(path)
+
+    assert [product.id for product in repository.search("shared")] == [
+        "P-001",
+        "P-002",
+        "P-003",
+    ]
+
+
+def test_search_excludes_inactive_products(tmp_path: Path) -> None:
+    path = tmp_path / "products.json"
+    write_products(
+        path,
+        [
+            product_payload(product_id="P-ACTIVE", sku="ACT", name="Active", keywords=["match"]),
+            product_payload(
+                product_id="P-INACTIVE",
+                sku="INA",
+                name="Inactive",
+                keywords=["match"],
+                active=False,
+            ),
+        ],
+    )
+    repository = ProductRepository(path)
+
+    assert [product.id for product in repository.search("match")] == ["P-ACTIVE"]
+
+
+def test_search_returns_at_most_five_matches(tmp_path: Path) -> None:
+    path = tmp_path / "products.json"
+    write_products(
+        path,
+        [
+            product_payload(
+                product_id=f"P-{index:03d}",
+                sku=f"SKU-{index}",
+                name=f"Product {index}",
+                keywords=["shared"],
+            )
+            for index in range(7)
+        ],
+    )
+    repository = ProductRepository(path)
+
+    assert [product.id for product in repository.search("shared")] == [
+        "P-000",
+        "P-001",
+        "P-002",
+        "P-003",
+        "P-004",
+    ]
+
+
+@pytest.mark.parametrize("query", ["", "  \t\r\n  ", "no-such-catalog-term"])
+def test_search_returns_no_arbitrary_matches(query: str, tmp_path: Path) -> None:
+    path = tmp_path / "products.json"
+    write_products(path, indexed_catalog())
+    repository = ProductRepository(path)
+
+    assert repository.search(query) == []
 
 
 def test_repository_loads_development_catalog_from_container_path() -> None:

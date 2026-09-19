@@ -1,8 +1,24 @@
-"""Read-only repository and indexes for validated product data."""
+"""Read-only repository, indexes, and deterministic catalog search.
+
+Search scoring uses mutually exclusive primary tiers so matches in lower-priority
+fields cannot overtake a higher-priority match:
+
+* exact normalized SKU: 600
+* exact normalized name: 500
+* normalized query phrase in the name: 400
+* normalized query phrase in a keyword or application: 300
+* normalized query phrase in the category or short description: 200
+* token-only fallback: 1--199
+
+For the fallback, each distinct query token earns the best applicable field weight:
+name/SKU 4, keyword/application 3, and category/short description 2. The sum is
+capped at 199. Equal scores are ordered by product ID.
+"""
 
 from __future__ import annotations
 
 import json
+import unicodedata
 from collections.abc import Iterable
 from json import JSONDecodeError
 from pathlib import Path
@@ -14,6 +30,17 @@ from app.core.exceptions import InvalidStaticDataError
 from app.schemas.product import Product
 
 _PRODUCT_CATALOG_ADAPTER = TypeAdapter(list[Product])
+
+_EXACT_SKU_SCORE = 600
+_EXACT_NAME_SCORE = 500
+_NAME_PHRASE_SCORE = 400
+_KEYWORD_APPLICATION_PHRASE_SCORE = 300
+_CATEGORY_DESCRIPTION_PHRASE_SCORE = 200
+_TOKEN_SCORE_CAP = 199
+_NAME_SKU_TOKEN_SCORE = 4
+_KEYWORD_APPLICATION_TOKEN_SCORE = 3
+_CATEGORY_DESCRIPTION_TOKEN_SCORE = 2
+_MAX_SEARCH_RESULTS = 5
 
 
 class ProductRepository:
@@ -80,6 +107,20 @@ class ProductRepository:
         )
         return _copy_products(matches)
 
+    def search(self, query: str) -> list[Product]:
+        """Return up to five active products ranked by deterministic catalog matches."""
+        normalized_query = _normalize_search_text(query)
+        if not normalized_query:
+            return []
+
+        ranked_matches = (
+            (score, product.id, product)
+            for product in self._active_products
+            if (score := _search_score(product, normalized_query)) > 0
+        )
+        ordered_matches = sorted(ranked_matches, key=lambda match: (-match[0], match[1]))
+        return _copy_products(product for _, _, product in ordered_matches[:_MAX_SEARCH_RESULTS])
+
 
 def _load_products(path: Path) -> list[Product]:
     """Read and validate a product JSON array with safe diagnostics."""
@@ -121,6 +162,79 @@ def _normalize_sku(sku: str) -> str:
 
 def _normalize_category(category: str) -> str:
     return category.strip().casefold()
+
+
+def _normalize_search_text(value: str) -> str:
+    """Normalize compatibility forms, case, punctuation, and whitespace for search."""
+    compatibility_normalized = unicodedata.normalize("NFKC", value).casefold()
+    punctuation_normalized = "".join(
+        " " if unicodedata.category(character).startswith("P") else character
+        for character in compatibility_normalized
+    )
+    return " ".join(punctuation_normalized.split())
+
+
+def _search_score(product: Product, normalized_query: str) -> int:
+    """Score one active product using the documented, mutually exclusive tiers."""
+    normalized_sku = _normalize_search_text(product.sku)
+    normalized_name = _normalize_search_text(product.name)
+    normalized_keywords = tuple(_normalize_search_text(value) for value in product.keywords)
+    normalized_applications = tuple(_normalize_search_text(value) for value in product.applications)
+    normalized_category = _normalize_search_text(product.category)
+    normalized_short_description = _normalize_search_text(product.short_description)
+
+    if normalized_query == normalized_sku:
+        return _EXACT_SKU_SCORE
+    if normalized_query == normalized_name:
+        return _EXACT_NAME_SCORE
+    if normalized_query in normalized_name:
+        return _NAME_PHRASE_SCORE
+    if _phrase_in_any(normalized_query, (*normalized_keywords, *normalized_applications)):
+        return _KEYWORD_APPLICATION_PHRASE_SCORE
+    if _phrase_in_any(
+        normalized_query,
+        (normalized_category, normalized_short_description),
+    ):
+        return _CATEGORY_DESCRIPTION_PHRASE_SCORE
+
+    query_tokens = set(normalized_query.split())
+    name_sku_tokens = set(normalized_name.split()) | set(normalized_sku.split())
+    keyword_application_tokens = _tokens_from((*normalized_keywords, *normalized_applications))
+    category_description_tokens = _tokens_from((normalized_category, normalized_short_description))
+
+    token_score = sum(
+        _best_token_score(
+            token,
+            name_sku_tokens,
+            keyword_application_tokens,
+            category_description_tokens,
+        )
+        for token in query_tokens
+    )
+    return min(token_score, _TOKEN_SCORE_CAP)
+
+
+def _phrase_in_any(phrase: str, values: Iterable[str]) -> bool:
+    return any(phrase in value for value in values)
+
+
+def _tokens_from(values: Iterable[str]) -> set[str]:
+    return {token for value in values for token in value.split()}
+
+
+def _best_token_score(
+    token: str,
+    name_sku_tokens: set[str],
+    keyword_application_tokens: set[str],
+    category_description_tokens: set[str],
+) -> int:
+    if token in name_sku_tokens:
+        return _NAME_SKU_TOKEN_SCORE
+    if token in keyword_application_tokens:
+        return _KEYWORD_APPLICATION_TOKEN_SCORE
+    if token in category_description_tokens:
+        return _CATEGORY_DESCRIPTION_TOKEN_SCORE
+    return 0
 
 
 def _copy_product(product: Product | None) -> Product | None:
