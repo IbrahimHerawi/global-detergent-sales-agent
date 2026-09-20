@@ -4,20 +4,34 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 import httpx
 import pytest
 import respx
 from app.core.config import Settings
+from app.services.quotation_storage import (
+    LocalQuotationStorage,
+    QuotationStorageError,
+    StoredQuotationArtifact,
+    UnsafeQuotationPathError,
+)
 from app.services.whatsapp_service import (
+    META_DOCUMENT_CAPTION_LIMIT,
     META_TEXT_BODY_LIMIT,
+    WhatsAppDocumentSendError,
+    WhatsAppDocumentUploadError,
     WhatsAppService,
     WhatsAppTextSendError,
     split_text_message,
 )
 
 MESSAGES_URL = "https://graph.facebook.com/v24.0/123456789/messages"
+MEDIA_URL = "https://graph.facebook.com/v24.0/123456789/media"
 ACCESS_TOKEN = "test-access-token-not-real"
+QUOTATION_ID = "GDF-Q-20260920-A82F"
+QUOTATION_FILENAME = f"{QUOTATION_ID}.pdf"
+PDF_CONTENT = b"%PDF-1.4\nmock quotation\n%%EOF\n"
 
 
 def settings(**updates: object) -> Settings:
@@ -41,6 +55,14 @@ def success(message_id: str) -> httpx.Response:
             "messages": [{"id": message_id}],
         },
     )
+
+
+def stored_quotation(
+    root: Path,
+) -> tuple[LocalQuotationStorage, StoredQuotationArtifact]:
+    storage = LocalQuotationStorage(root=root)
+    reservation = storage.reserve(QUOTATION_ID)
+    return storage, storage.write(reservation, PDF_CONTENT)
 
 
 async def test_send_text_uses_configured_endpoint_auth_payload_and_timeout() -> None:
@@ -284,3 +306,369 @@ async def test_invalid_configuration_fails_before_any_request(updates: dict[str,
     async with httpx.AsyncClient() as client:
         with pytest.raises(ValueError):
             WhatsAppService(client, settings=settings(**updates))
+
+
+async def test_upload_document_uses_storage_and_official_pdf_multipart_format(
+    tmp_path: Path,
+) -> None:
+    storage, artifact = stored_quotation(tmp_path)
+    captured: list[httpx.Request] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"id": "987654321012345"})
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post(MEDIA_URL).mock(side_effect=responder)
+        async with httpx.AsyncClient() as client:
+            result = await WhatsAppService(
+                client,
+                settings=settings(),
+                quotation_storage=storage,
+            ).upload_document(str(artifact.path))
+
+    assert route.call_count == 1
+    assert result.media_id == "987654321012345"
+    assert result.filename == QUOTATION_FILENAME
+    assert not hasattr(result, "path")
+    request = captured[0]
+    assert request.headers["Authorization"] == f"Bearer {ACCESS_TOKEN}"
+    assert request.headers["Content-Type"].startswith("multipart/form-data; boundary=")
+    body = request.content
+    assert b'name="messaging_product"' in body
+    assert b"\r\n\r\nwhatsapp\r\n" in body
+    assert b'name="type"' in body
+    assert b"\r\n\r\napplication/pdf\r\n" in body
+    assert f'filename="{QUOTATION_FILENAME}"'.encode() in body
+    assert b"Content-Type: application/pdf" in body
+    assert PDF_CONTENT in body
+    assert request.extensions["timeout"] == {
+        "connect": 7.5,
+        "read": 7.5,
+        "write": 7.5,
+        "pool": 7.5,
+    }
+
+
+async def test_upload_document_rejects_missing_pdf_without_request(tmp_path: Path) -> None:
+    storage = LocalQuotationStorage(root=tmp_path)
+    missing = tmp_path.resolve() / QUOTATION_FILENAME
+
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(MEDIA_URL).mock(return_value=httpx.Response(200, json={"id": "1"}))
+        async with httpx.AsyncClient() as client:
+            service = WhatsAppService(
+                client,
+                settings=settings(),
+                quotation_storage=storage,
+            )
+            with pytest.raises(QuotationStorageError) as caught:
+                await service.upload_document(missing)
+
+    assert route.called is False
+    expected_detail = "Quotation PDF does not exist in artifact storage"
+    assert caught.value.diagnostic_detail == expected_detail
+    assert str(missing) not in (caught.value.diagnostic_detail or "")
+
+
+async def test_upload_document_requires_quotation_storage_adapter(tmp_path: Path) -> None:
+    path = tmp_path / QUOTATION_FILENAME
+    path.write_bytes(PDF_CONTENT)
+
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(MEDIA_URL).mock(return_value=httpx.Response(200, json={"id": "1"}))
+        async with httpx.AsyncClient() as client:
+            service = WhatsAppService(client, settings=settings())
+            with pytest.raises(RuntimeError, match="quotation storage is required"):
+                await service.upload_document(path)
+
+    assert route.called is False
+
+
+async def test_upload_document_rejects_invalid_pdf_without_request(tmp_path: Path) -> None:
+    storage = LocalQuotationStorage(root=tmp_path)
+    invalid = tmp_path.resolve() / QUOTATION_FILENAME
+    invalid.write_bytes(b"not a PDF")
+
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(MEDIA_URL).mock(return_value=httpx.Response(200, json={"id": "1"}))
+        async with httpx.AsyncClient() as client:
+            service = WhatsAppService(
+                client,
+                settings=settings(),
+                quotation_storage=storage,
+            )
+            with pytest.raises(QuotationStorageError):
+                await service.upload_document(invalid)
+
+    assert route.called is False
+
+
+async def test_upload_document_rejects_path_outside_storage_without_request(
+    tmp_path: Path,
+) -> None:
+    storage_root = tmp_path / "quotes"
+    outside_root = tmp_path / "outside"
+    storage = LocalQuotationStorage(root=storage_root)
+    outside_root.mkdir()
+    forged = outside_root / QUOTATION_FILENAME
+    forged.write_bytes(PDF_CONTENT)
+
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(MEDIA_URL).mock(return_value=httpx.Response(200, json={"id": "1"}))
+        async with httpx.AsyncClient() as client:
+            service = WhatsAppService(
+                client,
+                settings=settings(),
+                quotation_storage=storage,
+            )
+            with pytest.raises(UnsafeQuotationPathError):
+                await service.upload_document(forged)
+
+    assert route.called is False
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        Path("customer-name.pdf"),
+        Path("GDF-Q-20260920-A82F.txt"),
+    ],
+)
+async def test_upload_document_accepts_only_backend_generated_pdf_names(
+    tmp_path: Path,
+    path: Path,
+) -> None:
+    storage = LocalQuotationStorage(root=tmp_path)
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(MEDIA_URL).mock(return_value=httpx.Response(200, json={"id": "1"}))
+        async with httpx.AsyncClient() as client:
+            service = WhatsAppService(
+                client,
+                settings=settings(),
+                quotation_storage=storage,
+            )
+            with pytest.raises(ValueError):
+                await service.upload_document(path)
+
+    assert route.called is False
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 429, 500])
+async def test_upload_document_external_rejection_is_safe_and_not_retried(
+    tmp_path: Path,
+    status_code: int,
+) -> None:
+    storage, artifact = stored_quotation(tmp_path)
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post(MEDIA_URL).mock(
+            return_value=httpx.Response(
+                status_code,
+                json={"error": {"message": str(artifact.path), "token": ACCESS_TOKEN}},
+            )
+        )
+        async with httpx.AsyncClient() as client:
+            service = WhatsAppService(
+                client,
+                settings=settings(),
+                quotation_storage=storage,
+            )
+            with pytest.raises(WhatsAppDocumentUploadError) as caught:
+                await service.upload_document(artifact.path)
+
+    assert route.call_count == 1
+    assert caught.value.outcome_uncertain is False
+    expected_detail = f"Meta document upload returned HTTP {status_code}"
+    assert caught.value.diagnostic_detail == expected_detail
+    assert str(artifact.path) not in (caught.value.diagnostic_detail or "")
+    assert ACCESS_TOKEN not in (caught.value.diagnostic_detail or "")
+
+
+async def test_upload_document_timeout_is_uncertain_and_not_retried(tmp_path: Path) -> None:
+    storage, artifact = stored_quotation(tmp_path)
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post(MEDIA_URL).mock(side_effect=httpx.ReadTimeout("ambiguous"))
+        async with httpx.AsyncClient() as client:
+            service = WhatsAppService(
+                client,
+                settings=settings(),
+                quotation_storage=storage,
+            )
+            with pytest.raises(WhatsAppDocumentUploadError) as caught:
+                await service.upload_document(artifact.path)
+
+    assert route.call_count == 1
+    assert caught.value.outcome_uncertain is True
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, content=b"not-json"),
+        httpx.Response(200, json={}),
+        httpx.Response(200, json={"id": 123}),
+        httpx.Response(200, json={"id": "bad media id"}),
+    ],
+)
+async def test_upload_document_malformed_success_is_uncertain(
+    tmp_path: Path,
+    response: httpx.Response,
+) -> None:
+    storage, artifact = stored_quotation(tmp_path)
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post(MEDIA_URL).mock(return_value=response)
+        async with httpx.AsyncClient() as client:
+            service = WhatsAppService(
+                client,
+                settings=settings(),
+                quotation_storage=storage,
+            )
+            with pytest.raises(WhatsAppDocumentUploadError) as caught:
+                await service.upload_document(artifact.path)
+
+    assert route.call_count == 1
+    assert caught.value.outcome_uncertain is True
+
+
+@pytest.mark.parametrize("caption", [None, "Your requested quotation"])
+async def test_send_document_uses_media_id_filename_and_optional_caption(
+    caption: str | None,
+) -> None:
+    captured: list[httpx.Request] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return success("wamid.document-1")
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post(MESSAGES_URL).mock(side_effect=responder)
+        async with httpx.AsyncClient() as client:
+            result = await WhatsAppService(client, settings=settings()).send_document(
+                "+97450000000",
+                "987654321012345",
+                QUOTATION_FILENAME,
+                caption,
+            )
+
+    assert route.call_count == 1
+    assert result.outbound_message_id == "wamid.document-1"
+    document = {
+        "id": "987654321012345",
+        "filename": QUOTATION_FILENAME,
+    }
+    if caption is not None:
+        document["caption"] = caption
+    assert json.loads(captured[0].content) == {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": "97450000000",
+        "type": "document",
+        "document": document,
+    }
+    assert captured[0].extensions["timeout"] == {
+        "connect": 7.5,
+        "read": 7.5,
+        "write": 7.5,
+        "pool": 7.5,
+    }
+
+
+@pytest.mark.parametrize(
+    ("media_id", "filename", "caption"),
+    [
+        ("", QUOTATION_FILENAME, None),
+        ("bad media id", QUOTATION_FILENAME, None),
+        ("123", "customer-controlled.pdf", None),
+        ("123", "../GDF-Q-20260920-A82F.pdf", None),
+        ("123", QUOTATION_FILENAME, "   "),
+        ("123", QUOTATION_FILENAME, "x" * (META_DOCUMENT_CAPTION_LIMIT + 1)),
+    ],
+)
+async def test_send_document_rejects_invalid_fields_without_request(
+    media_id: str,
+    filename: str,
+    caption: str | None,
+) -> None:
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(MESSAGES_URL).mock(return_value=success("wamid.never"))
+        async with httpx.AsyncClient() as client:
+            service = WhatsAppService(client, settings=settings())
+            with pytest.raises(ValueError):
+                await service.send_document(
+                    "97450000000",
+                    media_id,
+                    filename,
+                    caption,
+                )
+
+    assert route.called is False
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 429, 500])
+async def test_send_document_external_rejection_is_safe_and_not_retried(
+    status_code: int,
+) -> None:
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post(MESSAGES_URL).mock(
+            return_value=httpx.Response(
+                status_code,
+                json={"error": {"message": "customer secret", "token": ACCESS_TOKEN}},
+            )
+        )
+        async with httpx.AsyncClient() as client:
+            service = WhatsAppService(client, settings=settings())
+            with pytest.raises(WhatsAppDocumentSendError) as caught:
+                await service.send_document(
+                    "97450000000",
+                    "987654321012345",
+                    QUOTATION_FILENAME,
+                )
+
+    assert route.call_count == 1
+    assert caught.value.outcome_uncertain is False
+    assert caught.value.diagnostic_detail == f"Meta document send returned HTTP {status_code}"
+    assert ACCESS_TOKEN not in (caught.value.diagnostic_detail or "")
+
+
+async def test_send_document_timeout_is_uncertain_and_not_retried() -> None:
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post(MESSAGES_URL).mock(side_effect=httpx.ReadTimeout("ambiguous"))
+        async with httpx.AsyncClient() as client:
+            service = WhatsAppService(client, settings=settings())
+            with pytest.raises(WhatsAppDocumentSendError) as caught:
+                await service.send_document(
+                    "97450000000",
+                    "987654321012345",
+                    QUOTATION_FILENAME,
+                )
+
+    assert route.call_count == 1
+    assert caught.value.outcome_uncertain is True
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, content=b"not-json"),
+        httpx.Response(200, json={}),
+        httpx.Response(200, json={"messaging_product": "whatsapp", "messages": []}),
+        httpx.Response(
+            200,
+            json={"messaging_product": "whatsapp", "messages": [{"id": "not-wamid"}]},
+        ),
+    ],
+)
+async def test_send_document_malformed_success_is_uncertain(response: httpx.Response) -> None:
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post(MESSAGES_URL).mock(return_value=response)
+        async with httpx.AsyncClient() as client:
+            service = WhatsAppService(client, settings=settings())
+            with pytest.raises(WhatsAppDocumentSendError) as caught:
+                await service.send_document(
+                    "97450000000",
+                    "987654321012345",
+                    QUOTATION_FILENAME,
+                )
+
+    assert route.call_count == 1
+    assert caught.value.outcome_uncertain is True

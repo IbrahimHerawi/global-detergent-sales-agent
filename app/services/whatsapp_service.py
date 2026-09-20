@@ -1,25 +1,38 @@
 """Direct Meta WhatsApp Cloud API client.
 
-This task implements outbound text only. The service borrows one reusable
-``httpx.AsyncClient`` from the application lifespan and never accepts an
-endpoint URL from a caller.
+The service borrows one reusable ``httpx.AsyncClient`` from the application
+lifespan and never accepts an endpoint URL from a caller. Quotation documents
+are read only through the configured artifact-storage boundary.
 """
 
 from __future__ import annotations
 
+import asyncio
+import io
+import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 
 import httpx
 
 from app.core.config import Settings, get_settings
 from app.core.exceptions import WhatsAppAPIError
+from app.services.quotation_storage import (
+    QuotationArtifactStorage,
+    QuotationStorageError,
+    StoredQuotationArtifact,
+)
 from app.services.session_service import normalize_customer_identity
 
 META_GRAPH_API_BASE_URL: Final = "https://graph.facebook.com"
 META_TEXT_BODY_LIMIT: Final = 4_096
+META_DOCUMENT_CAPTION_LIMIT: Final = 1_024
+_QUOTATION_PDF_FILENAME_PATTERN: Final = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?-[0-9]{8}-[0-9A-F]{4}\.pdf$"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +64,21 @@ class TextSendResult:
         return tuple(part.outbound_message_id for part in self.parts)
 
 
+@dataclass(frozen=True, slots=True)
+class DocumentUploadResult:
+    """Checkpoint-safe result of a quotation PDF upload."""
+
+    media_id: str
+    filename: str
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentSendResult:
+    """Checkpoint-safe result of a document-message send."""
+
+    outbound_message_id: str
+
+
 class WhatsAppTextSendError(WhatsAppAPIError):
     """Safe text-send failure with partial progress and ambiguity metadata."""
 
@@ -69,13 +97,47 @@ class WhatsAppTextSendError(WhatsAppAPIError):
         self.outcome_uncertain = outcome_uncertain
 
 
+class WhatsAppDocumentUploadError(WhatsAppAPIError):
+    """Safe document-upload failure with retry ambiguity metadata."""
+
+    code = "whatsapp_document_upload_failed"
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        outcome_uncertain: bool,
+        cause: BaseException | None = None,
+    ) -> None:
+        super().__init__(detail, cause=cause)
+        self.outcome_uncertain = outcome_uncertain
+
+
+class WhatsAppDocumentSendError(WhatsAppAPIError):
+    """Safe document-send failure with retry ambiguity metadata."""
+
+    code = "whatsapp_document_send_failed"
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        outcome_uncertain: bool,
+        cause: BaseException | None = None,
+    ) -> None:
+        super().__init__(detail, cause=cause)
+        self.outcome_uncertain = outcome_uncertain
+
+
 class WhatsAppService:
     """Send outbound content through a fixed, configured Meta endpoint."""
 
     __slots__ = (
         "_access_token",
         "_client",
+        "_media_url",
         "_messages_url",
+        "_quotation_storage",
         "_timeout_seconds",
     )
 
@@ -84,6 +146,7 @@ class WhatsAppService:
         http_client: httpx.AsyncClient,
         *,
         settings: Settings | None = None,
+        quotation_storage: QuotationArtifactStorage | None = None,
     ) -> None:
         if not isinstance(http_client, httpx.AsyncClient):
             raise TypeError("http_client must be an httpx.AsyncClient")
@@ -105,11 +168,14 @@ class WhatsAppService:
 
         self._client = http_client
         self._access_token = token_value
+        self._quotation_storage = quotation_storage
         self._timeout_seconds = resolved_settings.whatsapp_timeout_seconds
-        self._messages_url = (
+        phone_number_url = (
             f"{META_GRAPH_API_BASE_URL}/{resolved_settings.meta_graph_api_version}/"
-            f"{phone_number_id}/messages"
+            f"{phone_number_id}"
         )
+        self._media_url = f"{phone_number_url}/media"
+        self._messages_url = f"{phone_number_url}/messages"
 
     async def send_text(self, to: str, text: str) -> TextSendResult:
         """Send text parts sequentially and return each outbound Meta ID.
@@ -171,6 +237,117 @@ class WhatsAppService:
             )
 
         return TextSendResult(parts=tuple(delivered))
+
+    async def upload_document(self, path: str | Path) -> DocumentUploadResult:
+        """Upload one storage-validated quotation PDF and return its Meta ID.
+
+        The path is converted to the storage adapter's opaque artifact reference;
+        the adapter must validate both the backend-generated filename and its
+        location before any bytes can reach Meta. No automatic retry or quotation
+        regeneration is performed.
+        """
+        storage = self._quotation_storage
+        if storage is None:
+            raise RuntimeError("quotation storage is required for document uploads")
+        artifact = _quotation_artifact(path)
+
+        exists = await asyncio.to_thread(storage.exists, artifact)
+        if not exists:
+            raise QuotationStorageError("Quotation PDF does not exist in artifact storage")
+        pdf_content = await asyncio.to_thread(storage.read, artifact)
+
+        try:
+            # httpx consumes the multipart stream before ``post`` returns. Keep
+            # the handle scoped to that operation and close it on every outcome.
+            with io.BytesIO(pdf_content) as document:
+                response = await self._client.post(
+                    self._media_url,
+                    headers={"Authorization": f"Bearer {self._access_token}"},
+                    data={
+                        "messaging_product": "whatsapp",
+                        "type": "application/pdf",
+                    },
+                    files={
+                        "file": (artifact.path.name, document, "application/pdf"),
+                    },
+                    timeout=self._timeout_seconds,
+                )
+        except httpx.TimeoutException as error:
+            raise WhatsAppDocumentUploadError(
+                "Meta document upload timed out; upload outcome is unknown",
+                outcome_uncertain=True,
+                cause=error,
+            ) from error
+        except httpx.RequestError as error:
+            raise WhatsAppDocumentUploadError(
+                "Meta document upload failed at the network boundary; upload outcome is unknown",
+                outcome_uncertain=True,
+                cause=error,
+            ) from error
+
+        if not response.is_success:
+            raise WhatsAppDocumentUploadError(
+                f"Meta document upload returned HTTP {response.status_code}",
+                outcome_uncertain=False,
+            )
+
+        return DocumentUploadResult(
+            media_id=_uploaded_media_id(response),
+            filename=artifact.path.name,
+        )
+
+    async def send_document(
+        self,
+        to: str,
+        media_id: str,
+        filename: str,
+        caption: str | None = None,
+    ) -> DocumentSendResult:
+        """Send a previously uploaded quotation PDF by Meta media ID."""
+        destination = _meta_destination(to)
+        normalized_media_id = _provider_identifier(media_id, "media_id")
+        normalized_filename = _quotation_pdf_filename(filename)
+        normalized_caption = _document_caption(caption)
+        document: dict[str, str] = {
+            "id": normalized_media_id,
+            "filename": normalized_filename,
+        }
+        if normalized_caption is not None:
+            document["caption"] = normalized_caption
+
+        try:
+            response = await self._client.post(
+                self._messages_url,
+                headers={"Authorization": f"Bearer {self._access_token}"},
+                json={
+                    "messaging_product": "whatsapp",
+                    "recipient_type": "individual",
+                    "to": destination,
+                    "type": "document",
+                    "document": document,
+                },
+                timeout=self._timeout_seconds,
+            )
+        except httpx.TimeoutException as error:
+            raise WhatsAppDocumentSendError(
+                "Meta document send timed out; delivery outcome is unknown",
+                outcome_uncertain=True,
+                cause=error,
+            ) from error
+        except httpx.RequestError as error:
+            raise WhatsAppDocumentSendError(
+                "Meta document send failed at the network boundary; delivery outcome is unknown",
+                outcome_uncertain=True,
+                cause=error,
+            ) from error
+
+        if not response.is_success:
+            raise WhatsAppDocumentSendError(
+                f"Meta document send returned HTTP {response.status_code}",
+                outcome_uncertain=False,
+            )
+
+        return DocumentSendResult(outbound_message_id=_document_message_id(response))
 
 
 def split_text_message(text: str, *, limit: int = META_TEXT_BODY_LIMIT) -> tuple[str, ...]:
@@ -265,6 +442,107 @@ def _meta_destination(identity: str) -> str:
     return destination
 
 
+def _quotation_artifact(path: str | Path) -> StoredQuotationArtifact:
+    if not isinstance(path, str | Path):
+        raise TypeError("path must be a string or pathlib.Path from quotation storage")
+    candidate = Path(path)
+    filename = _quotation_pdf_filename(candidate.name)
+    return StoredQuotationArtifact(
+        quotation_id=filename.removesuffix(".pdf"),
+        path=candidate,
+    )
+
+
+def _quotation_pdf_filename(filename: str) -> str:
+    if not isinstance(filename, str):
+        raise TypeError("filename must be a string")
+    if not _QUOTATION_PDF_FILENAME_PATTERN.fullmatch(filename):
+        raise ValueError("filename must be a backend-generated quotation PDF filename")
+    return filename
+
+
+def _document_caption(caption: str | None) -> str | None:
+    if caption is None:
+        return None
+    if not isinstance(caption, str):
+        raise TypeError("caption must be a string or None")
+    if not caption.strip():
+        raise ValueError("caption must not be blank")
+    if len(caption) > META_DOCUMENT_CAPTION_LIMIT:
+        raise ValueError(f"caption must not exceed {META_DOCUMENT_CAPTION_LIMIT} characters")
+    return caption
+
+
+def _provider_identifier(value: str, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+    normalized = value.strip()
+    if (
+        not normalized
+        or len(normalized) > 512
+        or any(character.isspace() or ord(character) < 0x20 for character in normalized)
+    ):
+        raise ValueError(f"{field_name} is not a valid provider identifier")
+    return normalized
+
+
+def _uploaded_media_id(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise WhatsAppDocumentUploadError(
+            "Meta document upload returned malformed success JSON",
+            outcome_uncertain=True,
+            cause=error,
+        ) from error
+    if not isinstance(payload, Mapping):
+        raise _malformed_document_upload()
+    media_id = payload.get("id")
+    if not isinstance(media_id, str):
+        raise _malformed_document_upload()
+    try:
+        return _provider_identifier(media_id, "media_id")
+    except ValueError as error:
+        raise _malformed_document_upload(error) from error
+
+
+def _malformed_document_upload(
+    cause: BaseException | None = None,
+) -> WhatsAppDocumentUploadError:
+    return WhatsAppDocumentUploadError(
+        "Meta document upload returned a malformed success response",
+        outcome_uncertain=True,
+        cause=cause,
+    )
+
+
+def _document_message_id(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise WhatsAppDocumentSendError(
+            "Meta document send returned malformed success JSON",
+            outcome_uncertain=True,
+            cause=error,
+        ) from error
+    if not isinstance(payload, Mapping) or payload.get("messaging_product") != "whatsapp":
+        raise _malformed_document_send()
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or len(messages) != 1 or not isinstance(messages[0], Mapping):
+        raise _malformed_document_send()
+    message_id = messages[0].get("id")
+    if not isinstance(message_id, str) or not message_id.strip().startswith("wamid."):
+        raise _malformed_document_send()
+    return message_id.strip()
+
+
+def _malformed_document_send() -> WhatsAppDocumentSendError:
+    return WhatsAppDocumentSendError(
+        "Meta document send returned a malformed success response",
+        outcome_uncertain=True,
+    )
+
+
 def _outbound_message_id(
     response: httpx.Response,
     part_number: int,
@@ -306,10 +584,15 @@ def _is_placeholder(value: str) -> bool:
 
 
 __all__ = [
+    "META_DOCUMENT_CAPTION_LIMIT",
     "META_GRAPH_API_BASE_URL",
     "META_TEXT_BODY_LIMIT",
+    "DocumentSendResult",
+    "DocumentUploadResult",
     "TextPartDelivery",
     "TextSendResult",
+    "WhatsAppDocumentSendError",
+    "WhatsAppDocumentUploadError",
     "WhatsAppService",
     "WhatsAppTextSendError",
     "split_text_message",
