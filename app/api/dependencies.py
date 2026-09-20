@@ -23,11 +23,14 @@ from app.repositories.product_repository import ProductRepository
 from app.repositories.quotation_rules_repository import QuotationRulesRepository
 from app.services.company_service import CompanyService
 from app.services.conversation_service import ConversationService
+from app.services.message_deduplication_service import MessageDeduplicationService
 from app.services.pdf_service import PDFService
 from app.services.product_service import ProductService
 from app.services.quotation_service import QuotationService
 from app.services.quotation_storage import LocalQuotationStorage
 from app.services.session_service import SessionService
+from app.services.whatsapp_processing_coordinator import WhatsAppProcessingCoordinator
+from app.services.whatsapp_service import WhatsAppService
 
 _DEVELOPMENT_MANIFEST_NAME = "development_data_manifest.json"
 
@@ -52,6 +55,9 @@ class ApplicationResources:
     tool_executor: ToolExecutor
     agent: AIAgent | None
     conversation_service: ConversationService
+    message_deduplication_service: MessageDeduplicationService
+    whatsapp_service: WhatsAppService | None
+    whatsapp_processing_coordinator: WhatsAppProcessingCoordinator | None
     _closed: bool = False
 
     async def aclose(self) -> None:
@@ -135,6 +141,29 @@ async def build_application_resources(settings: Settings) -> ApplicationResource
             agent=agent,
             quotation_service=quotation_service,
         )
+        message_deduplication_service = MessageDeduplicationService(
+            redis_client,
+            settings=settings,
+        )
+        whatsapp_service = (
+            WhatsAppService(
+                http_client,
+                settings=settings,
+                quotation_storage=quotation_storage,
+            )
+            if _whatsapp_transport_is_configured(settings)
+            else None
+        )
+        whatsapp_processing_coordinator = (
+            WhatsAppProcessingCoordinator(
+                conversation=conversation_service,
+                deduplication=message_deduplication_service,
+                transport=whatsapp_service,
+                settings=settings,
+            )
+            if whatsapp_service is not None
+            else None
+        )
         return ApplicationResources(
             settings=settings,
             redis=redis_client,
@@ -152,6 +181,9 @@ async def build_application_resources(settings: Settings) -> ApplicationResource
             tool_executor=tool_executor,
             agent=agent,
             conversation_service=conversation_service,
+            message_deduplication_service=message_deduplication_service,
+            whatsapp_service=whatsapp_service,
+            whatsapp_processing_coordinator=whatsapp_processing_coordinator,
         )
     except BaseException:
         await _close_clients(redis_client, http_client, openai_client)
@@ -184,6 +216,16 @@ def get_session_service(request: Request) -> SessionService:
 
 def get_conversation_service(request: Request) -> ConversationService:
     return get_application_resources(request).conversation_service
+
+
+def get_whatsapp_processing_coordinator(
+    request: Request,
+) -> WhatsAppProcessingCoordinator | None:
+    """Return the configured transport pipeline without weakening signature checks."""
+    resources = getattr(request.app.state, "resources", None)
+    if not isinstance(resources, ApplicationResources):
+        return None
+    return resources.whatsapp_processing_coordinator
 
 
 def get_redis_client(request: Request) -> Redis:
@@ -280,6 +322,20 @@ async def _close_clients(
             await redis_client.aclose()
 
 
+def _whatsapp_transport_is_configured(settings: Settings) -> bool:
+    token = settings.whatsapp_access_token
+    phone_number_id = settings.whatsapp_phone_number_id
+    if token is None or phone_number_id is None:
+        return False
+    token_value = token.get_secret_value().strip()
+    return bool(
+        token_value
+        and not (token_value.startswith("<") and token_value.endswith(">"))
+        and phone_number_id.isascii()
+        and phone_number_id.isdigit()
+    )
+
+
 __all__ = [
     "ApplicationResources",
     "build_application_resources",
@@ -292,4 +348,5 @@ __all__ = [
     "get_quotation_service",
     "get_redis_client",
     "get_session_service",
+    "get_whatsapp_processing_coordinator",
 ]
