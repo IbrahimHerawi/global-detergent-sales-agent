@@ -15,7 +15,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 
 from app.api.dependencies import ApplicationResources, build_application_resources
-from app.api.routes import dev_chat_router, health_router, products_router, quotations_router
+from app.api.routes import (
+    dev_chat_router,
+    health_router,
+    products_router,
+    quotations_router,
+    whatsapp_webhook_router,
+)
 from app.core.config import Settings, get_settings
 from app.core.exceptions import (
     TECHNICAL_FALLBACK_MESSAGE,
@@ -73,6 +79,7 @@ app = FastAPI(
 app.state.settings_provider = get_settings
 app.state.resource_factory = build_application_resources
 app.include_router(health_router)
+app.include_router(whatsapp_webhook_router)
 if get_settings().app_env != "production":
     app.include_router(products_router)
     app.include_router(dev_chat_router)
