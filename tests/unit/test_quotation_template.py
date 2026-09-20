@@ -210,7 +210,7 @@ def test_customer_text_is_escaped_and_long_content_renders_readably(
     assert "&lt;script&gt;alert" in html
     assert "&lt;pending&gt;" in html
     assert "overflow-wrap: anywhere" in html
-    assert "word-break: break-word" in html
+    assert "word-break: break-word" not in html
     assert "table-layout: fixed" in html
     assert pdf.startswith(b"%PDF-")
     assert page_count >= 1

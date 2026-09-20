@@ -35,4 +35,20 @@ database 15 for tests; normal development uses database 0 from `.env`.
 docker compose run --rm -e APP_ENV=test -e REDIS_URL=redis://redis:6379/15 api uv run --frozen pytest
 ```
 
-Application health endpoints are intentionally deferred to Task 37.
+Run the deterministic conversation regression suite (including real Redis
+expiry and PDF generation, but no paid services):
+
+```console
+docker compose run --rm -e APP_ENV=test -e REDIS_URL=redis://redis:6379/15 api uv run --frozen pytest tests/conversations -m "not live_model"
+```
+
+An opt-in live-model evaluation uses the same scenarios and reports the model
+and effective agent configuration. Configure `OPENAI_API_KEY` and
+`OPENAI_MODEL` in the ignored `.env`, then run:
+
+```console
+docker compose run --rm -e APP_ENV=test -e RUN_LIVE_MODEL_EVAL=1 api uv run --frozen pytest tests/conversations/test_live_model_evaluation.py -m live_model -rA
+```
+
+Scenario-to-requirement traceability is documented in
+[`tests/conversations/README.md`](tests/conversations/README.md).

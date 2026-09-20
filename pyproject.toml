@@ -55,3 +55,6 @@ files = ["app", "tests"]
 addopts = "--strict-config --strict-markers"
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "live_model: opt-in paid evaluation against the configured OpenAI model",
+]

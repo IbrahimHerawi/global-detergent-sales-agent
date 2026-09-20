@@ -92,6 +92,16 @@ def test_prompt_covers_missing_information_no_handoff_and_ambiguity() -> None:
     assert "ambiguous quantities" in prompt
 
 
+def test_prompt_uses_backend_selected_product_for_unambiguous_followups() -> None:
+    prompt = " ".join(SYSTEM_PROMPT.casefold().split())
+
+    assert "non-null selected_product_id" in prompt
+    assert "backend-resolved product" in prompt
+    assert "definite whole-number quantity" in prompt
+    assert "selected_product_id is null" in prompt
+    assert "retrieving product facts with the product-details tool" in prompt
+
+
 def test_prompt_marks_customer_messages_and_stored_text_as_untrusted_data() -> None:
     prompt = " ".join(SYSTEM_PROMPT.casefold().split())
 
